@@ -2,14 +2,15 @@ idf_component_register(
 SRCS 
     "bm1370.c"
     "bm1368.c"
-    "bm1366.c"
+    "bm1366.cpp"
     "bm1397.c"
     "serial.c"
-    "crc.c"
+    "crc.cpp"
     "common.c"
     "asic.c"
     "frequency_transition_bmXX.c"
     "pll.c"
+    "asic_utils.c"
 
 INCLUDE_DIRS 
     "include"

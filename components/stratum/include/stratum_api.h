@@ -5,14 +5,21 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <sys/time.h>
+#include "mining_types.h"
 
 
 #define MAX_MERKLE_BRANCHES 32
 #define HASH_SIZE 32
 #define COINBASE_SIZE 100
 #define COINBASE2_SIZE 128
-#define MAX_REQUEST_IDS 1024
+#define MAX_REQUEST_IDS 16
 #define MAX_EXTRANONCE_2_LEN 32
+
+// typedef struct StrView {
+//     const char* str;
+//     uint32_t len;
+// } StrView_t;
+
 
 typedef enum
 {
@@ -37,7 +44,8 @@ typedef struct
     char *prev_block_hash;
     char *coinbase_1;
     char *coinbase_2;
-    uint8_t *merkle_branches;
+    // uint8_t *merkle_branches;
+    HashLink_t* merkle__branches;
     size_t n_merkle_branches;
     uint32_t version;
     uint32_t target;
@@ -53,17 +61,28 @@ typedef struct
     // Indicates the type of request the message represents.
     stratum_method method;
 
-    // mining.notify
-    int should_abandon_work;
-    mining_notify *mining_notification;
-    // mining.set_difficulty
-    uint32_t new_difficulty;
-    // mining.set_version_mask
-    uint32_t version_mask;
-    // result
-    bool response_success;
-    char * error_str;
+    union {
+        struct {
+            // mining.notify
+            int should_abandon_work;
+            mining_notify *mining_notification;
+        };
+        struct {
+            // mining.set_difficulty
+            uint32_t new_difficulty;
+        };
+        struct {
+            // mining.set_version_mask
+            uint32_t version_mask;
+        };
+        struct {
+            // result
+            bool response_success;
+            char * error_str;
+        };
+    };
 } StratumApiV1Message;
+
 
 typedef struct {
     int64_t timestamp_us;
@@ -71,9 +90,15 @@ typedef struct {
 } RequestTiming;
 
 
-void STRATUM_V1_initialize_buffer();
+// void STRATUM_V1_initialize_buffer();
 
-char *STRATUM_V1_receive_jsonrpc_line(int sockfd);
+void STRATUM_V1_init(void);
+
+void STRATUM_V1_clear_jsonrpc_buffer(void);
+
+const char* STRATUM_V1_receive_jsonrpc_line(int sockfd);
+// void STRATUM_V1_consume_jsonrpc(const unsigned strLen);
+// void STRATUM_V1_return_jsonrpc_line(const StrView_t line);
 
 int STRATUM_V1_subscribe(int socket, int send_uid, const char * model);
 

@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "frequency_transition_bmXX.h"
 #include "pll.h"
+#include "asic_utils.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -33,6 +34,32 @@
 #define CMD_INACTIVE 0x03
 
 #define MISC_CONTROL 0x18
+
+const AsicDrvr_t BM1370_drvr = {
+    .id = BM1370,
+    .name = "BM1370",
+    .hashes_per_clock = 2040,
+    .get_compatibility = BM1370_get_compatibility,
+    .init = BM1370_init,
+    .process_work = BM1370_process_work,
+    .set_max_baud = BM1370_set_max_baud,
+    .send_work = BM1370_send_work,
+    .set_version_mask = BM1370_set_version_mask,
+    .send_frequency = BM1370_send_hash_frequency,
+    .get_job_frequency_ms = BM1370_get_job_frequency_ms
+};  
+
+typedef struct __attribute__((__packed__))
+{
+    uint8_t job_id;
+    uint8_t num_midstates;
+    uint8_t starting_nonce[4];
+    uint8_t nbits[4];
+    uint8_t ntime[4];
+    uint8_t merkle_root[32];
+    uint8_t prev_block_hash[32];
+    uint8_t version[4];
+} BM1370_job;
 
 typedef struct __attribute__((__packed__))
 {
@@ -116,6 +143,10 @@ static void _set_chip_address(uint8_t chipAddr)
     _send_BM1370((TYPE_CMD | GROUP_SINGLE | CMD_SETADDRESS), read_address, 2, BM1370_SERIALTX_DEBUG);
 }
 
+uint32_t BM1370_get_job_frequency_ms(GlobalState* g) {
+    return 500;
+}
+
 void BM1370_set_version_mask(uint32_t version_mask) 
 {
     int versions_to_roll = version_mask >> 13;
@@ -139,6 +170,14 @@ void BM1370_send_hash_frequency(float target_freq)
     _send_BM1370(TYPE_CMD | GROUP_ALL | CMD_WRITE, freqbuf, 6, BM1370_SERIALTX_DEBUG);
 
     ESP_LOGI(TAG, "Setting Frequency to %g MHz (%g)", target_freq, frequency);
+}
+
+unsigned BM1370_get_compatibility(const uint16_t chip_id) {
+    if(chip_id == 0x1370) {
+        return 100;
+    } else {
+        return 0;
+    }
 }
 
 uint8_t BM1370_init(float frequency, uint16_t asic_count, uint16_t difficulty)
@@ -281,9 +320,9 @@ int BM1370_set_max_baud(void)
 
 static uint8_t id = 0;
 
-void BM1370_send_work(void * pvParameters, bm_job * next_bm_job)
+void BM1370_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job)
 {
-    GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
+    // GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
 
     BM1370_job job;
     id = (id + 24) % 128;
@@ -292,8 +331,10 @@ void BM1370_send_work(void * pvParameters, bm_job * next_bm_job)
     memcpy(&job.starting_nonce, &next_bm_job->starting_nonce, 4);
     memcpy(&job.nbits, &next_bm_job->target, 4);
     memcpy(&job.ntime, &next_bm_job->ntime, 4);
-    memcpy(job.merkle_root, next_bm_job->merkle_root_be, 32);
-    memcpy(job.prev_block_hash, next_bm_job->prev_block_hash_be, 32);
+    // memcpy(job.merkle_root, next_bm_job->merkle_root_be, 32);
+    // memcpy(job.prev_block_hash, next_bm_job->prev_block_hash_be, 32);
+    asic_cpy_hash_reverse_words(next_bm_job->merkle_root, job.merkle_root);
+    asic_cpy_hash_reverse_words(next_bm_job->prev_block_hash, job.prev_block_hash);
     memcpy(&job.version, &next_bm_job->version, 4);
 
     if (GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[job.job_id] != NULL) {
@@ -314,7 +355,7 @@ void BM1370_send_work(void * pvParameters, bm_job * next_bm_job)
     _send_BM1370((TYPE_JOB | GROUP_SINGLE | CMD_WRITE), (uint8_t *)&job, sizeof(BM1370_job), BM1370_DEBUG_WORK);
 }
 
-task_result * BM1370_process_work(void * pvParameters)
+task_result * BM1370_process_work(GlobalState * GLOBAL_STATE)
 {
     bm1370_asic_result_t asic_result = {0};
 
@@ -335,7 +376,7 @@ task_result * BM1370_process_work(void * pvParameters)
     uint32_t version_bits = (ntohs(asic_result.version) << 13); // shift the 16 bit value left 13
     ESP_LOGI(TAG, "Job ID: %02X, Core: %d/%d, Ver: %08" PRIX32, job_id, core_id, small_core_id, version_bits);
 
-    GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
+    // GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
 
     if (GLOBAL_STATE->valid_jobs[job_id] == 0) {
         ESP_LOGW(TAG, "Invalid job nonce found, 0x%02X", job_id);

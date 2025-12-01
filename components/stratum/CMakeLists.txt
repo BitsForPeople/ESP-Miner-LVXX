@@ -3,6 +3,9 @@ SRCS
     "utils.c"
     "mining.c"
     "stratum_api.c"
+    "strbuf.c"
+    "hashpool.cpp"
+    "bm_job_pool.cpp"
                     
 INCLUDE_DIRS
     "include"
@@ -12,4 +15,6 @@ REQUIRES
     "mbedtls"
     "app_update"
     "esp_timer"
+    "simd_utils"
+    "objpool"
 )

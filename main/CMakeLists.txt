@@ -77,6 +77,8 @@ PRIV_REQUIRES
     "simd_utils"
     "objpool"
 
+    "freertos_cpp"
+
 EMBED_FILES "http_server/recovery_page.html"
 )
 

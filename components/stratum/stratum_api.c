@@ -15,13 +15,64 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <stdint.h>
+
+#include "mem_cpy.h"
+#include "mem_search.h"
+#include "strbuf.h"
+
+#include "hashpool.h"
+
+
+#ifndef LIKELY
+    #define LIKELY(c) __builtin_expect(!!(c),1)
+#endif
+
+#ifndef UNLIKELY
+    #define UNLIKELY(c) __builtin_expect(!!(c),0)
+#endif
 
 #define BUFFER_SIZE 1024
 #define MAX_EXTRANONCE_2_LEN 32
-static const char * TAG = "stratum_api";
+static const char* const TAG = "stratum_api";
 
-static char * json_rpc_buffer = NULL;
-static size_t json_rpc_buffer_size = 0;
+static const uint32_t HASHPOOL_INIT_SIZE = 24;
+
+static const unsigned JSON_RPC_MIN_CHUNK_SIZE = 512;
+static const unsigned JSON_RPC_MAX_MSG_SIZE = 16384-JSON_RPC_MIN_CHUNK_SIZE-1;
+
+static StrBuf_t strBuf = {};
+
+// typedef struct LineBuf {
+//     StrBuf_t strBuf;
+//     char* line_end;
+// } LineBuf_t;
+
+// static inline void linebuf_init(LineBuf_t* const lb) {
+//     strbuf_init(&lb->strBuf);
+//     lb->line_end = NULL;
+// }
+
+// static inline void linebuf_release(LineBuf_t* const lb) {
+//     strbuf_release(&lb->strBuf);
+//     lb->line_end = NULL;
+// }
+
+// static inline void linebuf_consume_line(LineBuf_t* const lb) {
+//     if(lb->line_end != NULL) {
+//         strbuf_remove(&lb->strBuf,lb->line_end - lb->strBuf.buffer + 1);
+//         lb->line_end = NULL;
+//     }
+// }
+
+// static inline bool linebuf_ensure_space(LineBuf_t* const lb, const unsigned space) {
+//     return strbuf_ensure_space(&lb->strBuf,space);
+// }
+
+// static LineBuf_t lineBuf = {};
+
+// static char * json_rpc_buffer = NULL;
+// static uint32_t json_rpc_buffer_size = 0;
 static int last_parsed_request_id = -1;
 
 static RequestTiming request_timings[MAX_REQUEST_IDS];
@@ -41,6 +92,12 @@ static RequestTiming* get_request_timing(int request_id) {
     if (request_id < 0) return NULL;
     int index = request_id % MAX_REQUEST_IDS;
     return &request_timings[index];
+}
+
+void STRATUM_V1_init(void) {
+    if(hashpool_get_size() == 0) {
+        hashpool_grow_by(HASHPOOL_INIT_SIZE);
+    }
 }
 
 void STRATUM_V1_stamp_tx(int request_id)
@@ -70,88 +127,203 @@ double STRATUM_V1_get_response_time_ms(int request_id)
     return response_time;
 }
 
-static void debug_stratum_tx(const char *);
-int _parse_stratum_subscribe_result_message(const char * result_json_str, char ** extranonce, int * extranonce2_len);
+static void debug_stratum_tx(const char *, const unsigned);
+// static int _parse_stratum_subscribe_result_message(const char * result_json_str, char ** extranonce, int * extranonce2_len);
 
-void STRATUM_V1_initialize_buffer()
-{
-    json_rpc_buffer = malloc(BUFFER_SIZE);
-    json_rpc_buffer_size = BUFFER_SIZE;
-    if (json_rpc_buffer == NULL) {
-        printf("Error: Failed to allocate memory for buffer\n");
-        exit(1);
+static int stratumSend(const int sockfd, const void* const buf, const int outLen) {
+    if(outLen > 0) {
+        debug_stratum_tx((const char*)buf, outLen);
+        return write(sockfd,buf,outLen);
+    } else {
+        ESP_LOGE(TAG, "Invalid size of stratum msg to send: %d", outLen);
+        return -1;
     }
-    memset(json_rpc_buffer, 0, BUFFER_SIZE);
 }
+
+// void STRATUM_V1_initialize_buffer()
+// {
+//     // json_rpc_buffer = malloc(BUFFER_SIZE);
+//     // json_rpc_buffer_size = BUFFER_SIZE;
+//     // if (json_rpc_buffer == NULL) {
+//     //     printf("Error: Failed to allocate memory for buffer\n");
+//     //     exit(1);
+//     // }
+//     // memset(json_rpc_buffer, 0, BUFFER_SIZE);
+
+//     if(!strbuf_alloc(&strBuf)) {
+//         ESP_LOGE(TAG, "Failed to allocate StrBuf.");
+//     }
+
+// }
 
 void cleanup_stratum_buffer()
 {
-    free(json_rpc_buffer);
+    // if(json_rpc_buffer) {
+    //     free(json_rpc_buffer);
+    //     json_rpc_buffer = NULL;
+    // }
+
+    strbuf_release(&strBuf);
 }
 
-static void realloc_json_buffer(size_t len)
-{
-    size_t old, new;
 
-    old = strlen(json_rpc_buffer);
-    new = old + len + 1;
 
-    if (new < json_rpc_buffer_size) {
-        return;
-    }
+static const unsigned MAX_STR_LEN = 65536;
 
-    new = new + (BUFFER_SIZE - (new % BUFFER_SIZE));
-    void * new_sockbuf = realloc(json_rpc_buffer, new);
-
-    if (new_sockbuf == NULL) {
-        fprintf(stderr, "Error: realloc failed in recalloc_sock()\n");
-        ESP_LOGI(TAG, "Restarting System because of ERROR: realloc failed in recalloc_sock");
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        esp_restart();
-    }
-
-    json_rpc_buffer = new_sockbuf;
-    memset(json_rpc_buffer + old, 0, new - old);
-    json_rpc_buffer_size = new;
+static inline uint32_t _strlen(const char* const str) {
+    const char* p = mem_findStrEnd(str, MAX_STR_LEN);
+    return p-str;
 }
 
-char * STRATUM_V1_receive_jsonrpc_line(int sockfd)
-{
-    if (json_rpc_buffer == NULL) {
-        STRATUM_V1_initialize_buffer();
-    }
-    char *line, *tok = NULL;
-    char recv_buffer[BUFFER_SIZE];
-    int nbytes;
-    size_t buflen = 0;
+// static inline char* findNL() {
+//     const char* const p = mem_findLineEnd(json_rpc_buffer,json_rpc_buffer_size);
+//     if(*p == '\n') {
+//         return (char*)p;
+//     } else {
+//         return NULL;
+//     }
+// }
 
-    if (!strstr(json_rpc_buffer, "\n")) {
-        do {
-            memset(recv_buffer, 0, BUFFER_SIZE);
-            nbytes = recv(sockfd, recv_buffer, BUFFER_SIZE - 1, 0);
-            if (nbytes == -1) {
-                ESP_LOGI(TAG, "Error: recv (errno %d: %s)", errno, strerror(errno));
-                if (json_rpc_buffer) {
-                    free(json_rpc_buffer);
-                    json_rpc_buffer=0;
-                }
-                return 0;
+static inline char* findNL(const char* const str, const unsigned maxLen) {
+    if(maxLen != 0) {
+        char* const p = mem_find_u8(str,maxLen,'\n'); // mem_findLineEnd(str,maxLen);
+        if((p-str) < maxLen) {
+            return (char*)p;
+        } 
+    }
+    return NULL;
+}
+
+static inline char* findNL_sb(const StrBuf_t* const str) {
+    if(str->len != 0) {
+        const char* const p = mem_findLineEnd(str->buffer,str->len);
+        if(*p == '\n') {
+            return (char*)p;
+        }
+    }
+    return NULL;
+}
+
+static inline char* newStr(const char* const begin, const unsigned len) {
+    char* const str = malloc(len+1);
+    if(str) {
+        cpy_mem(begin,str,len);
+        str[len] = 0;
+    }
+    return str;
+}
+
+/**
+ * @brief  Stores the length of the last line we returned so that we can remove this
+ * much data when the next line is requested.
+  */
+static unsigned lineLen = 0;
+
+void STRATUM_V1_clear_jsonrpc_buffer(void) {
+    StrBuf_t* const sb = &strBuf;
+    strbuf_reset(sb);
+}
+
+const char* STRATUM_V1_receive_jsonrpc_line(int sockfd)
+{
+    StrBuf_t* const sb = &strBuf;
+    if(sb->buffer == NULL) {
+        strbuf_alloc(sb);
+    } else {
+        // Remove the data we returned previously.
+        strbuf_remove(sb,lineLen);
+    }
+
+    char* nlp;
+    {
+        char* pstr = sb->buffer; // Start looking for the next NL here.
+        int nbytes = sb->len; // number of new/unsearched bytes
+        while((nlp = findNL(pstr,nbytes)) == NULL) {
+            // No NL currently in buffer. Go and read some more data.
+
+            if(UNLIKELY( sb->len > JSON_RPC_MAX_MSG_SIZE )) {
+                // 16kb and no newline? Something's wrong!
+                ESP_LOGW(TAG, "JSON-RPC message exceeds size limit!");
+                strbuf_release(sb);
+                return NULL;
             }
 
-            realloc_json_buffer(nbytes);
-            strncat(json_rpc_buffer, recv_buffer, nbytes);
-        } while (!strstr(json_rpc_buffer, "\n"));
+            // This may re-allocate, invalidating any&all pointers into the string!
+            strbuf_ensure_space(sb,JSON_RPC_MIN_CHUNK_SIZE);
+
+            // New data gets put at the end; and that's where we'll start looking for the next NL too.
+            pstr = strbuf_get_end(sb); 
+            
+            nbytes = recv(sockfd, pstr, strbuf_get_space(sb), 0);
+            if (UNLIKELY(nbytes < 0)) {
+                ESP_LOGI(TAG, "Error: recv (errno %d: %s)", errno, strerror(errno));
+                strbuf_release(sb);
+                return NULL;
+            }
+
+            strbuf_added(sb,nbytes);
+        }
     }
-    buflen = strlen(json_rpc_buffer);
-    tok = strtok(json_rpc_buffer, "\n");
-    line = strdup(tok);
-    int len = strlen(line);
-    if (buflen > len + 1)
-        memmove(json_rpc_buffer, json_rpc_buffer + len + 1, buflen - len + 1);
-    else
-        strcpy(json_rpc_buffer, "");
-    return line;
+    
+    lineLen = nlp+1-sb->buffer; // Remember the amount of data we return now.
+    *nlp = 0; // Replace NL with terminator.
+    return sb->buffer;
 }
+
+
+
+// char * STRATUM_V1_receive_jsonrpc_line(int sockfd)
+// {
+//     if (json_rpc_buffer == NULL) {
+//         STRATUM_V1_initialize_buffer();
+//     }
+//     // char *line, *tok = NULL;
+//     char recv_buffer[BUFFER_SIZE];
+//     int nbytes;
+//     uint32_t buflen = 0;
+//     char* nlp;
+
+//     // if (!strstr(json_rpc_buffer, "\n")) {
+//     // if(!haveNL()) {
+//         while((nlp = findNL()) == NULL) {
+//             // memset(recv_buffer, 0, BUFFER_SIZE);
+//             nbytes = recv(sockfd, recv_buffer, BUFFER_SIZE - 1, 0);
+//             if (nbytes == -1) {
+//                 ESP_LOGI(TAG, "Error: recv (errno %d: %s)", errno, strerror(errno));
+//                 if (json_rpc_buffer) {
+//                     free(json_rpc_buffer);
+//                     json_rpc_buffer=0;
+//                 }
+//                 return 0;
+//             }
+
+//             recv_buffer[nbytes] = 0;
+
+//             realloc_json_buffer(nbytes);
+//             strncat(json_rpc_buffer, recv_buffer, nbytes);
+//         }; // while(!haveNL());
+//         // } while (!strstr(json_rpc_buffer, "\n"));
+//     // }
+    
+//     uint32_t len = nlp-json_rpc_buffer;
+    
+//     // buflen = _strlen(json_rpc_buffer);
+//     buflen = len + _strlen(nlp);
+//     // *nlp = 0;
+//     // tok = strtok(json_rpc_buffer, "\n");
+//     // line = strdup(tok);
+//     char* line = newStr(json_rpc_buffer,len);
+//     // int len = _strlen(line);
+    
+//     if (buflen > len + 1) {
+//         cpy_mem(json_rpc_buffer + len + 1, json_rpc_buffer, buflen - len + 1);
+//         // memmove(json_rpc_buffer, json_rpc_buffer + len + 1, buflen - len + 1);
+//     } else {
+//         json_rpc_buffer[0] = 0;
+//         // strcpy(json_rpc_buffer, "");
+//     }
+//     return line;
+// }
 
 void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
 {
@@ -292,10 +464,27 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         if (new_work->n_merkle_branches > MAX_MERKLE_BRANCHES) {
             printf("Too many Merkle branches.\n");
             abort();
+            __builtin_unreachable();
         }
-        new_work->merkle_branches = malloc(HASH_SIZE * new_work->n_merkle_branches);
-        for (size_t i = 0; i < new_work->n_merkle_branches; i++) {
-            hex2bin(cJSON_GetArrayItem(merkle_branch, i)->valuestring, new_work->merkle_branches + HASH_SIZE * i, HASH_SIZE);
+        
+        if(LIKELY(new_work->n_merkle_branches > 0)) {
+            HashLink_t* prev = hashpool_take();
+            new_work->merkle__branches = prev;
+            hex2bin(cJSON_GetArrayItem(merkle_branch, 0)->valuestring, prev->hash.u8, HASH_SIZE);
+
+            for (size_t i = 1; i < new_work->n_merkle_branches; i++) {
+                HashLink_t* hl = hashpool_take();
+                hex2bin(cJSON_GetArrayItem(merkle_branch, i)->valuestring, hl->hash.u8, HASH_SIZE);
+                prev->next = hl;
+                prev = hl;
+            }
+
+            prev->next = NULL; // end of the chain.
+
+            if(false) {
+                hashpool_log_stats();
+            }
+            
         }
 
         new_work->version = strtoul(cJSON_GetArrayItem(params, 5)->valuestring, NULL, 16);
@@ -321,7 +510,7 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         char * extranonce_str = cJSON_GetArrayItem(params, 0)->valuestring;
         uint32_t extranonce_2_len = cJSON_GetArrayItem(params, 1)->valueint;
         if (extranonce_2_len > MAX_EXTRANONCE_2_LEN) {
-            ESP_LOGW(TAG, "Extranonce_2_len %u exceeds maximum %d, clamping to maximum", 
+            ESP_LOGW(TAG, "Extranonce_2_len %" PRIu32 " exceeds maximum %d, clamping to maximum", 
                      extranonce_2_len, MAX_EXTRANONCE_2_LEN);
             extranonce_2_len = MAX_EXTRANONCE_2_LEN;
         }
@@ -332,47 +521,57 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
     cJSON_Delete(json);
 }
 
+static inline void releaseHashLinks(HashLink_t* hl) {
+    while (hl != NULL) {
+        HashLink_t* const n = hl->next;
+        hashpool_put(hl);
+        hl = n;
+    }
+}
+
 void STRATUM_V1_free_mining_notify(mining_notify * params)
 {
     free(params->job_id);
     free(params->prev_block_hash);
     free(params->coinbase_1);
     free(params->coinbase_2);
-    free(params->merkle_branches);
+
+    releaseHashLinks(params->merkle__branches);
+
     free(params);
 }
 
-int _parse_stratum_subscribe_result_message(const char * result_json_str, char ** extranonce, int * extranonce2_len)
-{
-    cJSON * root = cJSON_Parse(result_json_str);
-    if (root == NULL) {
-        ESP_LOGE(TAG, "Unable to parse %s", result_json_str);
-        return -1;
-    }
-    cJSON * result = cJSON_GetObjectItem(root, "result");
-    if (result == NULL) {
-        ESP_LOGE(TAG, "Unable to parse subscribe result %s", result_json_str);
-        return -1;
-    }
+// static int _parse_stratum_subscribe_result_message(const char * result_json_str, char ** extranonce, int * extranonce2_len)
+// {
+//     cJSON * root = cJSON_Parse(result_json_str);
+//     if (root == NULL) {
+//         ESP_LOGE(TAG, "Unable to parse %s", result_json_str);
+//         return -1;
+//     }
+//     cJSON * result = cJSON_GetObjectItem(root, "result");
+//     if (result == NULL) {
+//         ESP_LOGE(TAG, "Unable to parse subscribe result %s", result_json_str);
+//         return -1;
+//     }
 
-    cJSON * extranonce2_len_json = cJSON_GetArrayItem(result, 2);
-    if (extranonce2_len_json == NULL) {
-        ESP_LOGE(TAG, "Unable to parse extranonce2_len: %s", result->valuestring);
-        return -1;
-    }
-    *extranonce2_len = extranonce2_len_json->valueint;
+//     cJSON * extranonce2_len_json = cJSON_GetArrayItem(result, 2);
+//     if (extranonce2_len_json == NULL) {
+//         ESP_LOGE(TAG, "Unable to parse extranonce2_len: %s", result->valuestring);
+//         return -1;
+//     }
+//     *extranonce2_len = extranonce2_len_json->valueint;
 
-    cJSON * extranonce_json = cJSON_GetArrayItem(result, 1);
-    if (extranonce_json == NULL) {
-        ESP_LOGE(TAG, "Unable parse extranonce: %s", result->valuestring);
-        return -1;
-    }
-    *extranonce = strdup(extranonce_json->valuestring);
+//     cJSON * extranonce_json = cJSON_GetArrayItem(result, 1);
+//     if (extranonce_json == NULL) {
+//         ESP_LOGE(TAG, "Unable parse extranonce: %s", result->valuestring);
+//         return -1;
+//     }
+//     *extranonce = strdup(extranonce_json->valuestring);
 
-    cJSON_Delete(root);
+//     cJSON_Delete(root);
 
-    return 0;
-}
+//     return 0;
+// }
 
 int STRATUM_V1_subscribe(int socket, int send_uid, const char * model)
 {
@@ -380,38 +579,46 @@ int STRATUM_V1_subscribe(int socket, int send_uid, const char * model)
     char subscribe_msg[BUFFER_SIZE];
     const esp_app_desc_t *app_desc = esp_app_get_description();
     const char *version = app_desc->version;	
-    sprintf(subscribe_msg, "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": [\"bitaxe/%s/%s\"]}\n", send_uid, model, version);
-    debug_stratum_tx(subscribe_msg);
+    const int outLen = sprintf(subscribe_msg, "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": [\"bitaxe/%s/%s\"]}\n", send_uid, model, version);
 
-    return write(socket, subscribe_msg, strlen(subscribe_msg));
+    return stratumSend(socket, subscribe_msg, outLen);
+
+    // debug_stratum_tx(subscribe_msg);
+
+    // return write(socket, subscribe_msg, strlen(subscribe_msg));        
 }
 
 int STRATUM_V1_suggest_difficulty(int socket, int send_uid, uint32_t difficulty)
 {
     char difficulty_msg[BUFFER_SIZE];
-    sprintf(difficulty_msg, "{\"id\": %d, \"method\": \"mining.suggest_difficulty\", \"params\": [%ld]}\n", send_uid, difficulty);
-    debug_stratum_tx(difficulty_msg);
+    const int outLen = sprintf(difficulty_msg, "{\"id\": %d, \"method\": \"mining.suggest_difficulty\", \"params\": [%ld]}\n", send_uid, difficulty);
 
-    return write(socket, difficulty_msg, strlen(difficulty_msg));
+    return stratumSend(socket, difficulty_msg, outLen);
+
+    // debug_stratum_tx(difficulty_msg);
+
+    // return write(socket, difficulty_msg, strlen(difficulty_msg));
 }
 
 int STRATUM_V1_extranonce_subscribe(int socket, int send_uid)
 {
     char extranonce_msg[BUFFER_SIZE];
-    sprintf(extranonce_msg, "{\"id\": %d, \"method\": \"mining.extranonce.subscribe\", \"params\": []}\n", send_uid);
-    debug_stratum_tx(extranonce_msg);
+    const int outLen = sprintf(extranonce_msg, "{\"id\": %d, \"method\": \"mining.extranonce.subscribe\", \"params\": []}\n", send_uid);
+    return stratumSend(socket, extranonce_msg, outLen);
+    // debug_stratum_tx(extranonce_msg);
 
-    return write(socket, extranonce_msg, strlen(extranonce_msg));
+    // return write(socket, extranonce_msg, strlen(extranonce_msg));
 }
 
 int STRATUM_V1_authorize(int socket, int send_uid, const char * username, const char * pass)
 {
     char authorize_msg[BUFFER_SIZE];
-    sprintf(authorize_msg, "{\"id\": %d, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}\n", send_uid, username,
+    const int outLen = sprintf(authorize_msg, "{\"id\": %d, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}\n", send_uid, username,
             pass);
-    debug_stratum_tx(authorize_msg);
+    return stratumSend(socket, authorize_msg, outLen);
+    // debug_stratum_tx(authorize_msg);
 
-    return write(socket, authorize_msg, strlen(authorize_msg));
+    // return write(socket, authorize_msg, strlen(authorize_msg));
 }
 
 /// @param socket Socket to write to
@@ -425,31 +632,36 @@ int STRATUM_V1_submit_share(int socket, int send_uid, const char * username, con
                             const uint32_t nonce, const uint32_t version)
 {
     char submit_msg[BUFFER_SIZE];
-    sprintf(submit_msg,
-            "{\"id\": %d, \"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%08lx\", \"%08lx\", \"%08lx\"]}\n",
+    const int outLen = sprintf(submit_msg,
+            "{\"id\":%d,\"method\":\"mining.submit\",\"params\":[\"%s\",\"%s\",\"%s\",\"%08lx\",\"%08lx\",\"%08lx\"]}\n",
             send_uid, username, jobid, extranonce_2, ntime, nonce, version);
-    debug_stratum_tx(submit_msg);
 
-    return write(socket, submit_msg, strlen(submit_msg));
+    return stratumSend(socket,submit_msg,outLen);
+    // debug_stratum_tx(submit_msg);
+
+    // return write(socket, submit_msg, strlen(submit_msg));
 }
 
 int STRATUM_V1_configure_version_rolling(int socket, int send_uid, uint32_t * version_mask)
 {
-    char configure_msg[BUFFER_SIZE * 2];
-    sprintf(configure_msg,
+    // char configure_msg[BUFFER_SIZE * 2];
+    char configure_msg[BUFFER_SIZE];    
+    const int outLen = sprintf(configure_msg,
             "{\"id\": %d, \"method\": \"mining.configure\", \"params\": [[\"version-rolling\"], {\"version-rolling.mask\": "
             "\"ffffffff\"}]}\n",
             send_uid);
-    debug_stratum_tx(configure_msg);
+    return stratumSend(socket,configure_msg,outLen);
+    // debug_stratum_tx(configure_msg);
 
-    return write(socket, configure_msg, strlen(configure_msg));
+    // return write(socket, configure_msg, strlen(configure_msg));
 }
 
-static void debug_stratum_tx(const char * msg)
+static void debug_stratum_tx(const char * msg, const unsigned len)
 {
     STRATUM_V1_stamp_tx(last_parsed_request_id);
     //remove the trailing newline
-    char * newline = strchr(msg, '\n');
+    // char * newline = strchr(msg, '\n');
+    char* newline = findNL(msg,len);
     if (newline != NULL) {
         *newline = '\0';
     }

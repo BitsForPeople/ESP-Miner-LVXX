@@ -75,12 +75,11 @@ uint64_t nvs_config_get_u64(const char * key, const uint64_t default_value);
 void nvs_config_set_u64(const char * key, const uint64_t value);
 float nvs_config_get_float(const char *key, float default_value);
 void nvs_config_set_float(const char *key, float value);
-void nvs_config_commit(void);
 
 /**
  * @brief Returns the number of times the config was written to since boot.
- * Can be used to check for possible updates on config values: If two 
- * successive calls to \c nvs_config_get_modcount() return the same value,
+ * Can be used as a 'dirty' flag to check for possible updates on config values:
+ * If two successive calls to \c nvs_config_get_modcount() return the same value,
  * \e no config values were modified between the calls.
  * 
  * @return NVS config modification count since boot.

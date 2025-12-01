@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "common.h"
 #include "serial.h"
@@ -8,32 +9,172 @@
 
 #define PREAMBLE 0xAA55
 
-static const char * TAG = "common";
+static const char * const TAG = "common";
 
-unsigned char _reverse_bits(unsigned char num)
-{
-    unsigned char reversed = 0;
-    int i;
+static const uint8_t READ_REG0_CMD[] = {0x55, 0xAA, 0x52, 0x05, 0x00, 0x00, 0x0A};
 
-    for (i = 0; i < 8; i++) {
-        reversed <<= 1;      // Left shift the reversed variable by 1
-        reversed |= num & 1; // Use bitwise OR to set the rightmost bit of reversed to the current bit of num
-        num >>= 1;           // Right shift num by 1 to get the next bit
-    }
+// static inline bool has_preamble(const uint8_t* const buf) {
+//     static const uint16_t RX_PREAMBL = 0x55AA;
+//     return *(const uint16_t*)buf == RX_PREAMBL;
+// }
 
-    return reversed;
+typedef struct __attribute__((packed)) ReadRegBase {
+    uint16_t preamble;
+    uint16_t regVal1;
+    uint16_t regVal2;
+    uint8_t chipAddr;
+    uint8_t regAddr;
+} ReadRegBase_t;
+
+typedef struct __attribute__((packed)) ReadRegRspShrt {
+    ReadRegBase_t base;
+    uint8_t crc;
+} ReadRegRspShrt_t;
+
+static_assert(sizeof(ReadRegRspShrt_t) == 9);
+
+typedef struct __attribute__((packed)) ReadRegRspLong {
+    ReadRegBase_t base;
+    uint16_t extraBytes;
+    uint8_t crc; // If this comes back as 0x55 it's not a CRC5 (<=0x1f) but already the 2nd byte of a preamble of the next response.
+} ReadRegRspLong_t;
+
+static_assert(sizeof(ReadRegRspLong_t) == 11);
+
+static inline bool isLongResponse(const uint8_t* const data, const unsigned len) {
+    return (len >= sizeof(ReadRegRspLong_t)) && (((const ReadRegRspLong_t*)data)->crc <= 0x1f);
 }
 
-int _largest_power_of_two(int num)
-{
-    int power = 0;
+static inline bool isValidResponse(const uint8_t* const data, const unsigned len) {
+    return (len >= sizeof(ReadRegRspShrt_t)) &&
+           ((const ReadRegBase_t*)data)->preamble == 0x55AA &&
+           crc5_valid(data+2,len-2);
+}
 
-    while (num > 1) {
-        num = num >> 1;
-        power++;
+static inline bool isValidLongResponse(const uint8_t* const data, const unsigned len) {
+    return isLongResponse(data,len) && 
+           isValidResponse(data,sizeof(ReadRegRspLong_t)); 
+}
+
+static inline bool isValidShrtResponse(const uint8_t* const data, const unsigned len) {
+    return (len >= sizeof(ReadRegRspShrt_t)) &&
+           isValidResponse(data,sizeof(ReadRegRspShrt_t));     
+}
+
+int ASIC_detect(uint16_t* const out_chip_id) {
+
+    static const uint16_t RX_PREAMBL = 0x55AA;
+
+    static const unsigned RSP_SHRT = sizeof(ReadRegRspShrt_t);
+    static const unsigned RSP_LONG = sizeof(ReadRegRspLong_t);
+    static const unsigned RSP_DIFF = RSP_LONG - RSP_SHRT;
+
+
+    SERIAL_send(READ_REG0_CMD,sizeof(READ_REG0_CMD),false);
+
+    // union {
+    //     ReadRegBase_t base;
+    //     ReadRegRspLong_t lng; 
+    //     ReadRegRspShrt_t shrt[2];
+    //     uint8_t u8[sizeof(ReadRegRspShrt_t)*2];
+    // } rxBuf_;
+
+    // uint8_t* buf = rxBuf_.u8;
+    // int r = SERIAL_rx(buf,RSP_LONG,100);
+
+    // if(r >= RSP_SHRT) {
+    //     unsigned rspLen = RSP_SHRT;
+
+    //     if(isValidLongResponse(rxBuf,r)) {
+    //         rspLen = RSP_LONG;
+    //     } else
+    //     if(isValidShrtResponse(rxBuf,r)) {
+    //         if(r > RSP_SHRT) {
+    //             buf = (uint8_t*)&(rxBuf_.shrt[1]);
+    //         }
+    //     } else {
+    //         ESP_LOGE(TAG, "Fail.");
+    //     }
+    // }
+
+    union {
+        ReadRegBase_t base;
+        ReadRegRspShrt_t shrt;
+        ReadRegRspLong_t lng;
+        uint8_t u8[RSP_LONG];
+    } rxBuf;
+
+    int r = SERIAL_rx(rxBuf.u8,RSP_LONG,100);
+
+    int cnt = 0;
+
+    if(r >= 0) {
+        if(r >= RSP_SHRT) {
+            if(rxBuf.base.preamble == RX_PREAMBL) {
+                const bool isLong = (r == RSP_LONG) && (rxBuf.lng.crc <= 0x1f);
+                const unsigned rspLen = isLong ? RSP_LONG : RSP_SHRT;
+            
+                if(crc5_valid(rxBuf.u8+2, rspLen-2)) {
+                    cnt = 1;
+
+                    if(out_chip_id) {
+                        *out_chip_id = __builtin_bswap16(rxBuf.base.regVal1);
+                    }
+                    ESP_LOGD(TAG, "ASIC_detect: Found chip %" PRIx16, __builtin_bswap16(rxBuf.base.regVal1));
+
+                    // All good handling the first response. Prepare for any next response(s).
+
+                    if (r == RSP_LONG) {
+                        if(!isLong) {
+                            // We read too many bytes. Correct for that.
+                            if(RSP_DIFF > 2) { // The preamble of 2 bytes is already there.
+                                memcpy(rxBuf.u8+2, rxBuf.u8+RSP_SHRT+2, (RSP_DIFF-2));
+                            }
+                            // Now, the first RSP_DIFF bytes of the next response are already properly located in the buffer.
+                            r = SERIAL_rx( rxBuf.u8 + RSP_DIFF, RSP_SHRT-RSP_DIFF, 100 );
+                        } else {
+                            // Just read the next response.
+                            r = SERIAL_rx( rxBuf.u8, rspLen, 100);
+                        }
+
+                        bool err = false;
+                        while(r == rspLen) {
+                            if(rxBuf.base.preamble != RX_PREAMBL) {
+                                err = true;
+                                break;
+                            } else
+                            if (!crc5_valid(rxBuf.u8+2,rspLen-2)) {
+                                err = true;
+                                break;
+                            }
+                            ++cnt;
+                            r = SERIAL_rx( rxBuf.u8, rspLen, 250);
+                        }
+                        if(err) {
+                            ESP_LOGE(TAG, "ASIC_detect: Error at chip #%d", cnt);
+                            cnt = -cnt;
+                        }
+                    }
+                } else {
+                    ESP_LOGE(TAG, "ASIC_detect: CRC error in response!");
+                }    
+            } else {
+                ESP_LOGE(TAG, "ASIC_detect: Invalid preamble: 0x%" PRIx16, rxBuf.base.preamble);
+            }            
+        } else {
+            ESP_LOGE(TAG, "ASIC_detect: Failed to get ASIC response (got %d bytes)",r);
+        }
+        if(cnt <= 0) {
+            // Something went wrong.
+            // Consume any remaining response(s) from the serial:
+            while(SERIAL_rx(rxBuf.u8,sizeof(rxBuf.u8),100) > 0) {
+
+            }
+        }
+    } else {
+        ESP_LOGE(TAG, "ASIC_detect: Error reading ASIC response: %d",r);
     }
-
-    return 1 << power;
+    return cnt;
 }
 
 int count_asic_chips(uint16_t asic_count, uint16_t chip_id, int chip_id_response_length)
@@ -117,7 +258,7 @@ esp_err_t receive_work(uint8_t * buffer, int buffer_size)
         return ESP_FAIL;
     }
 
-    if (crc5(buffer + 2, buffer_size - 2) != 0) {
+    if (!crc5_valid(buffer + 2, buffer_size - 2)) {
         ESP_LOGE(TAG, "Checksum failed on response");        
         ESP_LOG_BUFFER_HEX(TAG, buffer, received);
         SERIAL_clear_buffer();
@@ -127,21 +268,3 @@ esp_err_t receive_work(uint8_t * buffer, int buffer_size)
     return ESP_OK;
 }
 
-void get_difficulty_mask(uint16_t difficulty, uint8_t *job_difficulty_mask)
-{
-    // The mask must be a power of 2 so there are no holes
-    // Correct:   {0b00000000, 0b00000000, 0b11111111, 0b11111111}
-    // Incorrect: {0b00000000, 0b00000000, 0b11100111, 0b11111111}
-    difficulty = _largest_power_of_two(difficulty) - 1;
-
-    job_difficulty_mask[0] = 0x00;
-    job_difficulty_mask[1] = 0x14; // TICKET_MASK
-
-    // convert difficulty into char array
-    // Ex: 256 = {0b00000000, 0b00000000, 0b00000000, 0b11111111}, {0x00, 0x00, 0x00, 0xff}
-    // Ex: 512 = {0b00000000, 0b00000000, 0b00000001, 0b11111111}, {0x00, 0x00, 0x01, 0xff}
-    job_difficulty_mask[2] = _reverse_bits((difficulty >> 24) & 0xFF);
-    job_difficulty_mask[3] = _reverse_bits((difficulty >> 16) & 0xFF);
-    job_difficulty_mask[4] = _reverse_bits((difficulty >>  8) & 0xFF);
-    job_difficulty_mask[5] = _reverse_bits( difficulty        & 0xFF);
-}

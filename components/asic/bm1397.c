@@ -42,6 +42,34 @@
 #define FAST_UART_CONFIGURATION 0x28
 #define MISC_CONTROL 0x18
 
+const AsicDrvr_t BM1397_drvr = {
+    .id = BM1397,
+    .name = "BM1397",
+    .hashes_per_clock = 672,
+    .get_compatibility = BM1397_get_compatibility,
+    .init = BM1397_init,
+    .process_work = BM1397_process_work,
+    .set_max_baud = BM1397_set_max_baud,
+    .send_work = BM1397_send_work,
+    .set_version_mask = NULL, // BM1397_set_version_mask,
+    .send_frequency = BM1397_send_hash_frequency,
+    .get_job_frequency_ms = BM1397_get_job_frequency_ms
+}; 
+
+typedef struct __attribute__((__packed__))
+{
+    uint8_t job_id;
+    uint8_t num_midstates;
+    uint8_t starting_nonce[4];
+    uint8_t nbits[4];
+    uint8_t ntime[4];
+    uint8_t merkle4[4];
+    uint8_t midstate[32];
+    uint8_t midstate1[32];
+    uint8_t midstate2[32];
+    uint8_t midstate3[32];
+} job_packet;
+
 typedef struct __attribute__((__packed__))
 {
     uint16_t preamble;
@@ -223,6 +251,14 @@ void BM1397_send_hash_frequency(float frequency)
     ESP_LOGI(TAG, "Setting Frequency to %g MHz (%g)", frequency, newf);
 }
 
+unsigned BM1397_get_compatibility(const uint16_t chip_id) {
+    if(chip_id == 0x1397) {
+        return 100;
+    } else {
+        return 0;
+    }
+}
+
 uint8_t BM1397_init(float frequency, uint16_t asic_count, uint16_t difficulty)
 {
     // send the init command
@@ -295,9 +331,9 @@ int BM1397_set_max_baud(void)
 
 static uint8_t id = 0;
 
-void BM1397_send_work(void *pvParameters, bm_job *next_bm_job)
+void BM1397_send_work(GlobalState* const GLOBAL_STATE, bm_job *next_bm_job)
 {
-    GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
+    // GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
 
     job_packet job;
     // max job number is 128
@@ -338,7 +374,7 @@ void BM1397_send_work(void *pvParameters, bm_job *next_bm_job)
     _send_BM1397((TYPE_JOB | GROUP_SINGLE | CMD_WRITE), (uint8_t *)&job, sizeof(job_packet), BM1397_DEBUG_WORK);
 }
 
-task_result *BM1397_process_work(void *pvParameters)
+task_result *BM1397_process_work(GlobalState* const GLOBAL_STATE)
 {
     bm1397_asic_result_t asic_result = {0};
 
@@ -352,7 +388,7 @@ task_result *BM1397_process_work(void *pvParameters)
     uint8_t rx_job_id = asic_result.job_id & 0xfc;
     uint8_t rx_midstate_index = asic_result.job_id & 0x03;
 
-    GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
+    // GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
     if (GLOBAL_STATE->valid_jobs[rx_job_id] == 0)
     {
         ESP_LOGW(TAG, "Invalid job nonce found, id=%d", rx_job_id);
@@ -360,10 +396,11 @@ task_result *BM1397_process_work(void *pvParameters)
     }
 
     uint32_t rolled_version = GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[rx_job_id]->version;
-    for (int i = 0; i < rx_midstate_index; i++)
-    {
-        rolled_version = increment_bitmask(rolled_version, GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[rx_job_id]->version_mask);
-    }
+    rolled_version = mining_get_rolled_version(rolled_version,rx_midstate_index,GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[rx_job_id]->version_mask);
+    // for (int i = 0; i < rx_midstate_index; i++)
+    // {
+    //     rolled_version = increment_bitmask(rolled_version, GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[rx_job_id]->version_mask);
+    // }
 
     // ASIC may return the same nonce multiple times
     // or one that was already found
@@ -393,4 +430,9 @@ task_result *BM1397_process_work(void *pvParameters)
     result.rolled_version = rolled_version;
 
     return &result;
+}
+
+uint32_t BM1397_get_job_frequency_ms(GlobalState* const GLOBAL_STATE) {
+    static const double NONCE_SPACE = (1ull << 32);
+    return (NONCE_SPACE / (double) (GLOBAL_STATE->POWER_MANAGEMENT_MODULE.frequency_value * GLOBAL_STATE->DEVICE_CONFIG.family.asic.small_core_count * 1000)) / (double) GLOBAL_STATE->DEVICE_CONFIG.family.asic_count;
 }
