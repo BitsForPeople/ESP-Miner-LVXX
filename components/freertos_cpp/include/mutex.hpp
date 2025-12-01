@@ -1,6 +1,8 @@
 #pragma once
+#include <functional>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+
 
 namespace freertos {
 
@@ -85,6 +87,7 @@ namespace freertos {
                 return getHandle();
             }
 
+            [[nodiscard]]
             Lck acquire(const TickType_t maxWait = portMAX_DELAY) {
                 return Lck::take(handle,maxWait);
             }
@@ -96,6 +99,12 @@ namespace freertos {
 
             bool give(void) {
                 return xSemaphoreGive(handle);
+            }
+
+            template<typename F, typename ... Args>
+            auto perform(F&& op, Args&&...args) {
+                Lck lck {acquire()};
+                return std::invoke(op,std::forward<Args>(args)...);
             }
 
 

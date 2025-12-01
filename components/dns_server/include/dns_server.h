@@ -59,24 +59,20 @@ extern "C"
     } dns_server_config_t;
 
     /**
-     * @brief DNS server handle
-     */
-    typedef struct dns_server_handle * dns_server_handle_t;
-
-    /**
      * @brief Set ups and starts a simple DNS server that will respond to all A queries (IPv4)
      * based on configured rules, pairs of name and either IPv4 address or a netif ID (to respond by it's IPv4 add)
      *
-     * @param config Configuration structure listing the pairs of (name, IP/netif-id)
-     * @return dns_server's handle on success, NULL on failure
+     * @param entries pointer to a list of pairs of (name, IP/netif-id)
+     * @param num_entries the number of entries in the list
+     * @return true if the DNS server was started
+     * @return false if the DNS server was not started, either because of an error or because the DNS server is already running.
      */
-    dns_server_handle_t start_dns_server(const dns_server_config_t * config);
+    bool dns_server_start(const dns_entry_pair_t* entries, size_t num_entries);
 
     /**
      * @brief Stops and destroys DNS server's task and structs
-     * @param handle DNS server's handle to destroy
      */
-    bool stop_dns_server(dns_server_handle_t handle);
+    void dns_server_stop(void);
 
 #ifdef __cplusplus
 }

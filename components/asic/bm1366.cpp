@@ -10,6 +10,8 @@ extern "C" {
 #include "serial.h"
 #include "utils.h"
 
+#include "asic_utils.h"
+
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -415,7 +417,7 @@ static const uint8_t SET_10_HASH_COUNTING[] = {0x00, 0x10, 0x00, 0x00, 0x15, 0x1
 static void sendDiffMask(const uint16_t difficulty) {
     //set difficulty mask
     uint8_t difficulty_mask[6];
-    get_difficulty_mask(difficulty, difficulty_mask);
+    ASIC_get_difficulty_mask(difficulty, difficulty_mask);
     sendCmd((GROUP_ALL | CMD_WRITE), difficulty_mask);
 }
 
@@ -725,7 +727,7 @@ task_result * BM1366_process_work(GlobalState* const GLOBAL_STATE)
 {
     bm1366_asic_result_t asic_result {};
 
-    if (receive_work((uint8_t *)&asic_result, sizeof(asic_result)) != ESP_OK) {
+    if (ASIC_receive_work((uint8_t *)&asic_result, sizeof(asic_result)) != ESP_OK) {
         return NULL;
     }
 

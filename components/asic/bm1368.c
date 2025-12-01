@@ -10,7 +10,9 @@
 #include "freertos/task.h"
 #include "frequency_transition_bmXX.h"
 #include "pll.h"
+
 #include "asic_utils.h"
+#include "asic_detect.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -213,7 +215,7 @@ uint8_t BM1368_init(float frequency, uint16_t asic_count, uint16_t difficulty)
     }
 
     uint8_t difficulty_mask[6];
-    get_difficulty_mask(difficulty, difficulty_mask);
+    ASIC_get_difficulty_mask(difficulty, difficulty_mask);
     _send_BM1368((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1368_SERIALTX_DEBUG);    
 
     do_frequency_transition(frequency, BM1368_send_hash_frequency);
@@ -256,8 +258,8 @@ void BM1368_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job)
     memcpy(&job.ntime, &next_bm_job->ntime, 4);
     // memcpy(job.merkle_root, next_bm_job->merkle_root_be, 32);
     // memcpy(job.prev_block_hash, next_bm_job->prev_block_hash_be, 32);
-    asic_cpy_hash_reverse_words(next_bm_job->merkle_root, job.merkle_root);
-    asic_cpy_hash_reverse_words(next_bm_job->prev_block_hash, job.prev_block_hash);
+    ASIC_cpy_hash_reverse_words(next_bm_job->merkle_root, job.merkle_root);
+    ASIC_cpy_hash_reverse_words(next_bm_job->prev_block_hash, job.prev_block_hash);
     memcpy(&job.version, &next_bm_job->version, 4);
 
     if (GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[job.job_id] != NULL) {
@@ -281,7 +283,7 @@ task_result * BM1368_process_work(GlobalState * GLOBAL_STATE)
 {
     bm1368_asic_result_t asic_result = {0};
 
-    if (receive_work((uint8_t *)&asic_result, sizeof(asic_result)) == ESP_FAIL) {
+    if (ASIC_receive_work((uint8_t *)&asic_result, sizeof(asic_result)) == ESP_FAIL) {
         return NULL;
     }
 

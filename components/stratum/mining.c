@@ -62,7 +62,7 @@ void free_bm_job(bm_job *job)
 {
     free(job->jobid);
     free(job->extranonce2);
-    // free(job);
+
     bmjobpool_put(job);
 }
 
@@ -90,19 +90,6 @@ static inline uint32_t min(const uint32_t a, const uint32_t b) {
 
 MemSpan_t construct_coinbase_tx_bin(const char* const coinbase_1, const char* const coinbase_2,
                             const char* const extranonce, const char* const extranonce_2, const MemSpan_t out_cb) {
-// {
-//     {
-//         uint32_t coinbase_tx_len = mem_strlen(coinbase_1) + mem_strlen(coinbase_2) + mem_strlen(extranonce) + mem_strlen(extranonce_2);
-
-//         if(out_cb.size < coinbase_tx_len/2) {
-//             ESP_LOGE(TAG, "Cannot construct coinbase of %" PRIu32 " bytes in buffer of %" PRIu32 " bytes.",
-//                 coinbase_tx_len/2,
-//                 (uint32_t)out_cb.size);
-//         } else {
-//             ESP_LOGI(TAG, "Coinbase TX: %" PRIu32 " bytes", coinbase_tx_len/2);
-//         }
-//     }
-
     MemSpan_t result;
     memspan_clear(&result);
 
@@ -145,15 +132,6 @@ MemSpan_t construct_coinbase_tx_bin(const char* const coinbase_1, const char* co
     result.size = out - out_cb.start_u8;
     return result;
 
-
-    // char *coinbase_tx = malloc(coinbase_tx_len);
-    // strcpy(coinbase_tx, coinbase_1);
-    // strcat(coinbase_tx, extranonce);
-    // strcat(coinbase_tx, extranonce_2);
-    // strcat(coinbase_tx, coinbase_2);
-    // coinbase_tx[coinbase_tx_len - 1] = '\0';
-
-    // return coinbase_tx;
 }
 
 void calculate_merkle_root_hash_bin(const MemSpan_t coinbase_tx,
@@ -164,55 +142,17 @@ void calculate_merkle_root_hash_bin(const MemSpan_t coinbase_tx,
     static_assert(sizeof(both_merkles) == 64);
 
     double_sha256_bin(coinbase_tx.start_u8, coinbase_tx.size, &both_merkles[0]);
-    // free(coinbase_tx_bin);
-
 
     const HashLink_t* hl = merkles;
     while(hl != NULL) {
         cpyToHash(hl->hash.u32,&both_merkles[1]);
-        double_sha256_bin((const uint8_t*)both_merkles, sizeof(both_merkles), &both_merkles[0]);
+        double_sha256_bin(both_merkles[0].u8, sizeof(both_merkles), &both_merkles[0]);
         hl = hl->next;
     }
-    // for (int i = 0; i < num_merkle_branches; i++)
-    // {
-    //     cpyToHash(merkle_branches[i],&both_merkles[1]);
-    //     double_sha256_bin((const uint8_t*)both_merkles, sizeof(both_merkles), &both_merkles[0]);
-    // }
 
     cpyHashTo(&both_merkles[0],out_hash);
 
 }
-
-void calculate_merkle_root_hash2(const char *coinbase_tx, const HashLink_t* merkles, Hash_t* const out_hash)
-{
-    size_t coinbase_tx_bin_len = strlen(coinbase_tx) / 2;
-    uint8_t *coinbase_tx_bin = malloc(coinbase_tx_bin_len);
-    hex2bin(coinbase_tx, coinbase_tx_bin, coinbase_tx_bin_len);
-
-    Hash_t both_merkles[2];
-
-    static_assert(sizeof(both_merkles) == 64);
-
-    double_sha256_bin(coinbase_tx_bin, coinbase_tx_bin_len, &both_merkles[0]);
-    free(coinbase_tx_bin);
-
-
-    const HashLink_t* hl = merkles;
-    while(hl != NULL) {
-        cpyToHash(hl->hash.u32,&both_merkles[1]);
-        double_sha256_bin((const uint8_t*)both_merkles, sizeof(both_merkles), &both_merkles[0]);
-        hl = hl->next;
-    }
-    // for (int i = 0; i < num_merkle_branches; i++)
-    // {
-    //     cpyToHash(merkle_branches[i],&both_merkles[1]);
-    //     double_sha256_bin((const uint8_t*)both_merkles, sizeof(both_merkles), &both_merkles[0]);
-    // }
-
-    cpyHashTo(&both_merkles[0],out_hash);
-}
-
-
 
 
 void calculate_merkle_root_hash(const char *coinbase_tx, const uint8_t merkle_branches[][32], const int num_merkle_branches, Hash_t* const out_hash)
@@ -239,7 +179,6 @@ void calculate_merkle_root_hash(const char *coinbase_tx, const uint8_t merkle_br
 }
 
 // take a mining_notify struct with ascii hex strings and convert it to a bm_job struct
-// bm_job construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, const uint32_t version_mask, const uint32_t difficulty)
 void construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, const uint32_t version_mask, const uint32_t difficulty, bm_job* const out_job)
 {
     out_job->version = params->version;
@@ -250,13 +189,7 @@ void construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, co
 
     cpyHashTo(merkle_root,out_job->merkle_root);
 
-    // flip32bytes(out_job->merkle_root_be,merkle_root);
-    // reverse_bytes(out_job->merkle_root_be, 32);
-
     swap_endian_words(params->prev_block_hash, out_job->prev_block_hash);
-
-    // hex2bin(params->prev_block_hash, out_job->prev_block_hash_be, 32);
-    // reverse_bytes(out_job->prev_block_hash_be, 32);
 
 // TODO: This is unnecessary when the ASIC doesn't need a midstate:
 
@@ -347,67 +280,6 @@ char *extranonce_2_generate(uint64_t extranonce_2, uint32_t length)
 ///////cgminer nonce testing
 /* truediffone == 0x00000000FFFF0000000000000000000000000000000000000000000000000000
  */
-
-// struct Hash {
-//     union {
-//         uint8_t u8[32];
-//         uint32_t h[8];
-//     };
-// };
-// typedef struct Hash Hash_t;
-
-// _Static_assert(sizeof(Hash_t) == 32);
-
-// static inline void cpy32(const void* const src, void* const dst) {
-//     const uint64_t* s = (const uint64_t*)src;
-//     uint64_t* d = (uint64_t*)dst;
-//     uint64_t* const end = d + 4;
-//     do {
-//         *d = *s;
-//         ++d;
-//         ++s;
-//     } while(d < end);
-// }
-
-// static inline void cpyToHash(const void* const src, Hash_t* const hash) {
-//     // const uint64_t* const s = (const uint64_t*)src;
-//     // uint64_t* const d = (uint64_t*)hash->h;
-//     // d[0] = s[0];
-//     // d[1] = s[1];
-//     // d[2] = s[2];
-//     // d[3] = s[3];
-//     // const uint32_t* const s = (const uint32_t*)src;
-//     // uint32_t* const d = hash->h;
-//     // for(unsigned i = 0; i < 8; ++i) {
-//     //     d[i] = s[i];
-//     // }
-//     // cpy32(src,hash->h);
-//     memcpy(hash->h, src, sizeof(Hash_t));
-// }
-
-// static inline void cpyHashTo(const Hash_t* const hash, void* const dst) {
-//     uint64_t* const d = (uint64_t*)dst;
-//     const uint64_t* const s = (const uint64_t*)hash->h;
-//     d[0] = s[0];
-//     d[1] = s[1];
-//     d[2] = s[2];
-//     d[3] = s[3];
-// }
-
-
-
-// static uint32_t get_hash_diff(const Hash_t* const hash) {
-//     const uint32_t D1 = 0xffff0000ul;
-//     // const uint32_t* h = (const uint32_t*)hash;
-//     if (hash->h[7] != 0) {
-//         return 0;
-//     } else
-//     if (hash->h[6] == 0) {
-//         return 0xfffffffful;
-//     } else {
-//         return D1 / hash->h[6];
-//     }
-// }
 
 void mining_hash_block(const BlockHeader_t* const hdr, Hash_t* const hash) {
     mbedtls_sha256((const uint8_t*)hdr, sizeof(BlockHeader_t), hash->u8, 0);
@@ -511,41 +383,3 @@ uint64_t test_nonce_value(const bm_job* const job, const uint32_t nonce, const u
 
     return mining_get_hash_diff_u64(hashBuf);
 }
-
-// static inline uint32_t getfirstset(const uint32_t x) {
-//     return x & -x;
-// }
-// uint32_t increment_bitmask(uint32_t value, uint32_t mask) {
-//     if(mask != 0) {
-//         uint32_t v;
-//         do {
-//             const uint32_t bit = getfirstset(mask);
-//             v = value;
-//             value = value ^ bit; // Toggle the bit in value
-//             mask = mask ^ bit; // clear the bit in mask
-//         } while(value < v && mask != 0); // If toggling cleared the bit in value (overflow), repeat with the next eligible bit from mask.
-//     }
-//     return value;
-// }
-
-
-
-// uint32_t increment_bitmask(const uint32_t value, const uint32_t mask)
-// {
-//     // if mask is zero, just return the original value
-//     if (mask == 0)
-//         return value;
-
-//     uint32_t carry = (value & mask) + (mask & -mask);      // increment the least significant bit of the mask
-//     uint32_t overflow = carry & ~mask;                     // find overflowed bits that are not in the mask
-//     uint32_t new_value = (value & ~mask) | (carry & mask); // set bits according to the mask
-
-//     // Handle carry propagation
-//     if (overflow > 0)
-//     {
-//         uint32_t carry_mask = (overflow << 1);                // shift left to get the mask where carry should be propagated
-//         new_value = increment_bitmask(new_value, carry_mask); // recursively handle carry propagation
-//     }
-
-//     return new_value;
-// }

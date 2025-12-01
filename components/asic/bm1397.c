@@ -17,6 +17,9 @@
 #include "global_state.h"
 #include "pll.h"
 
+#include "asic_utils.h"
+#include "asic_detect.h"
+
 #define BM1397_CHIP_ID 0x1397
 #define BM1397_CHIP_ID_RESPONSE_LENGTH 9
 
@@ -293,7 +296,7 @@ uint8_t BM1397_init(float frequency, uint16_t asic_count, uint16_t difficulty)
 
     //set difficulty mask
     uint8_t difficulty_mask[6];
-    get_difficulty_mask(difficulty, difficulty_mask);
+    ASIC_get_difficulty_mask(difficulty, difficulty_mask);
     _send_BM1397((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1397_SERIALTX_DEBUG);
 
     unsigned char init5[9] = {0x00, PLL3_PARAMETER, 0xC0, 0x70, 0x01, 0x11}; // init5 - pll3_parameter
@@ -378,7 +381,7 @@ task_result *BM1397_process_work(GlobalState* const GLOBAL_STATE)
 {
     bm1397_asic_result_t asic_result = {0};
 
-    if (receive_work((uint8_t *)&asic_result, sizeof(asic_result)) == ESP_FAIL) {
+    if (ASIC_receive_work((uint8_t *)&asic_result, sizeof(asic_result)) == ESP_FAIL) {
         return NULL;
     }
 

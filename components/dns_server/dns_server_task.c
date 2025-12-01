@@ -9,13 +9,20 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
+#include <freertos/timers.h>
 
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_system.h"
+#include "esp_event.h"
+#include "esp_wifi.h"
 
+
+#include "dns_server_task.h"
 #include "dns_server.h"
+#include "dns_server_intf.h"
+
 #include "lwip/err.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
@@ -60,22 +67,6 @@ typedef struct __attribute__((__packed__))
     uint32_t ip_addr;
 } dns_answer_t;
 
-static const EventBits_t EB_STOP_REQUEST = (1<<0);
-static const EventBits_t EB_STOPPED = (1<<1);
-
-// DNS server handle
-struct dns_server_handle
-{
-    bool started;
-
-    EventGroupHandle_t eventgrp;
-    int sock;
-
-    TaskHandle_t task;
-    int num_of_entries;
-    dns_entry_pair_t entry[];
-};
-
 /*
     Parse the name from the packet from the DNS name format to a regular .-seperated name
     returns the pointer to the next part of the packet
@@ -109,7 +100,7 @@ static char * parse_dns_name(char * raw_name, char * parsed_name, size_t parsed_
 }
 
 // Parses the DNS request and prepares a DNS response with the IP of the softAP
-static int parse_dns_request(char * req, size_t req_len, char * dns_reply, size_t dns_reply_max_len, dns_server_handle_t h)
+static int parse_dns_request(char * req, size_t req_len, char * dns_reply, size_t dns_reply_max_len, const struct dns_server_entry_list* entries)
 {
     ESP_LOGD(TAG, "TEST");
     if (req_len > dns_reply_max_len) {
@@ -163,18 +154,19 @@ static int parse_dns_request(char * req, size_t req_len, char * dns_reply, size_
         if (qd_type == QD_TYPE_A) {
             esp_ip4_addr_t ip = {.addr = IPADDR_ANY};
             // Check the configured rules to decide whether to answer this question or not
-            for (int i = 0; i < h->num_of_entries; ++i) {
+            // for (int i = 0; i < h->num_of_entries; ++i) {
+            for (int i = 0; i < entries->size; ++i) {
+                dns_entry_pair_t* e = &(entries->entries[i]);
                 // check if the name either corresponds to the entry, or if we should answer to all queries ("*")
-                if (strcmp(h->entry[i].name, "*") == 0 || strcmp(h->entry[i].name, name) == 0) {
-                    if (h->entry[i].if_key) {
-
+                if (strcmp(e->name, "*") == 0 || strcmp(e->name, name) == 0) {
+                    if (e->if_key) {
                         esp_netif_ip_info_t ip_info;
-                        esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey(h->entry[i].if_key), &ip_info);
+                        esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey(e->if_key), &ip_info);
                         ip.addr = ip_info.ip.addr;
-                        ESP_LOGD(TAG, "TEST %s", h->entry[i].if_key);
+                        ESP_LOGD(TAG, "TEST %s", e->if_key);
                         break;
-                    } else if (h->entry->ip.addr != IPADDR_ANY) {
-                        ip.addr = h->entry[i].ip.addr;
+                    } else if (e->ip.addr != IPADDR_ANY) {
+                        ip.addr = e->ip.addr;
                         break;
                     }
                 }
@@ -205,17 +197,6 @@ static int parse_dns_request(char * req, size_t req_len, char * dns_reply, size_
     return reply_len;
 }
 
-// static int dns_server_open_socket(void) {
-
-// }
-
-static bool isStopRequested(dns_server_handle_t hdl, TickType_t maxWait) {
-    return (xEventGroupWaitBits(hdl->eventgrp, EB_STOP_REQUEST,0,1,maxWait) & EB_STOP_REQUEST) != 0;
-}
-
-static void notifyStopped(dns_server_handle_t hdl) {
-    xEventGroupSetBits(hdl->eventgrp,EB_STOPPED);
-}
 /*
     Sets up a socket and listen for DNS queries,
     replies to all type A queries with the IP of the softAP
@@ -226,11 +207,16 @@ void dns_server_task(void * pvParameters)
     char addr_str[128];
     int addr_family;
     int ip_protocol;
-    dns_server_handle_t handle = pvParameters;
+    // dns_server_handle_t handle = pvParameters;
+    dns_server_inst_t inst = (dns_server_inst_t)pvParameters;
 
     ESP_LOGI(TAG, "DNS server task started.");
 
-    while (!isStopRequested(handle,0)) {
+    const struct dns_server_entry_list entries = dns_server_get_entry_list(inst);
+
+    // while (!isStopRequested(handle,0)) {
+    int prevSock = 0;
+    while(!dns_server_is_stop_requested(inst)) {
 
         struct sockaddr_in dest_addr;
         dest_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -240,12 +226,19 @@ void dns_server_task(void * pvParameters)
         ip_protocol = IPPROTO_IP;
         inet_ntoa_r(dest_addr.sin_addr, addr_str, sizeof(addr_str) - 1);
 
-        int sock = handle->sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
+        int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
         if (sock < 0) {
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
             break;
         }
         ESP_LOGI(TAG, "Socket created");
+
+        if(!dns_server_xch_sock(inst,prevSock,sock)) {
+            shutdown(sock, 0);
+            close(sock);
+            break;
+        }
+        prevSock = sock;
 
         int err = bind(sock, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
         if (err < 0) {
@@ -253,7 +246,7 @@ void dns_server_task(void * pvParameters)
         }
         ESP_LOGI(TAG, "Socket bound, port %d", DNS_PORT);
 
-        while (!isStopRequested(handle,0)) {
+        while (!dns_server_is_stop_requested(inst)) {
             ESP_LOGI(TAG, "Waiting for data");
             struct sockaddr_in6 source_addr; // Large enough for both IPv4 or IPv6
             socklen_t socklen = sizeof(source_addr);
@@ -261,7 +254,9 @@ void dns_server_task(void * pvParameters)
 
             // Error occurred during receiving
             if (len < 0) {
-                ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+                if(!!dns_server_is_stop_requested(inst)) {
+                    ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+                }
                 close(sock);
                 break;
             }
@@ -278,7 +273,7 @@ void dns_server_task(void * pvParameters)
                 rx_buffer[len] = 0;
 
                 char reply[DNS_MAX_LEN];
-                int reply_len = parse_dns_request(rx_buffer, len, reply, DNS_MAX_LEN, handle);
+                int reply_len = parse_dns_request(rx_buffer, len, reply, DNS_MAX_LEN, &entries);
 
                 ESP_LOGI(TAG, "Received %d bytes from %s | DNS reply with len: %d", len, addr_str, reply_len);
                 if (reply_len <= 0) {
@@ -294,76 +289,14 @@ void dns_server_task(void * pvParameters)
         }
 
         if (sock != -1) {
-            ESP_LOGE(TAG, "Shutting down socket");
+            ESP_LOGI(TAG, "Shutting down socket");
             shutdown(sock, 0);
             close(sock);
         }
     }
     ESP_LOGI(TAG, "DNS server task exiting.");
-    notifyStopped(handle);
+
+    dns_server_notify_stopped(inst);
     vTaskDelete(NULL);
 }
 
-static void freeHandle(dns_server_handle_t handle) {
-    if(handle) {
-        if (handle->eventgrp) {
-            vEventGroupDelete(handle->eventgrp);
-        }
-        free(handle);
-    }
-}
-
-dns_server_handle_t start_dns_server(const dns_server_config_t * config)
-{
-    dns_server_handle_t handle = calloc(1, sizeof(struct dns_server_handle) + config->num_of_entries * sizeof(dns_entry_pair_t));
-    ESP_RETURN_ON_FALSE(handle, NULL, TAG, "Failed to allocate dns server handle");
-
-    handle->eventgrp = xEventGroupCreate();
-    if(!handle->eventgrp) {
-        freeHandle(handle);
-        return NULL;
-    }
-    handle->sock = -1;
-
-    handle->started = true;
-    handle->num_of_entries = config->num_of_entries;
-    memcpy(handle->entry, config->item, config->num_of_entries * sizeof(dns_entry_pair_t));
-    
-    if(!xTaskCreatePinnedToCore(dns_server_task, "dns_server", 4096, handle, 5, &handle->task, xPortGetCoreID())) {
-        freeHandle(handle);
-        ESP_LOGE(TAG, "Failed to create DNS server task.");
-        return NULL;
-    }
-    return handle;
-}
-
-bool stop_dns_server(dns_server_handle_t handle)
-{
-    if(!handle) {
-        return true;
-    }
-
-    ESP_LOGI(TAG, "Stopping DNS server.");
-    handle->started = false;
-    EventBits_t bits = xEventGroupSync(handle->eventgrp, EB_STOP_REQUEST, EB_STOPPED, 10 / portTICK_PERIOD_MS);
-    if((bits & EB_STOPPED) == 0) {
-        // Not yet stopped. Close its socket.
-
-        // (Yes, there is a race condition on handle->sock here.)
-        int s = handle->sock;
-        if(s != -1) {
-            shutdown(s,0);
-            close(s);
-        }
-        // Wait for the task to terminate.
-        bits = xEventGroupWaitBits(handle->eventgrp,EB_STOPPED,0,0,1000/portTICK_PERIOD_MS);
-    }
-    if((bits & EB_STOPPED) != 0) {
-        freeHandle(handle);
-        ESP_LOGI(TAG, "DNS server stopped.");
-        return true;
-    } else {
-        ESP_LOGW(TAG, "Failed to stop DNS server.");
-        return false;
-    }
-}

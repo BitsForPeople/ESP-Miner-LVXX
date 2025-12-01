@@ -44,7 +44,7 @@
 #include "system.h"
 #include "websocket.h"
 
-#include "wifi_event_listener.h"
+// #include "wifi_event_listener.h"
 
 #define JSON_ALL_STATS_ELEMENT_SIZE 120
 #define JSON_DASHBOARD_STATS_ELEMENT_SIZE 60
@@ -57,7 +57,7 @@ static char axeOSVersion[32];
 static GlobalState * GLOBAL_STATE;
 static httpd_handle_t server = NULL;
 
-static WifiEventListenerCtx_t evtCtx;
+// static WifiEventListenerCtx_t evtCtx;
 
 static inline void* allocPrefPSRAM(size_t sz) {
     void* m = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -66,22 +66,6 @@ static inline void* allocPrefPSRAM(size_t sz) {
     }
     return m;
 }
-
-static void wifi_event_handler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data) {
-    if (event_base == WIFI_EVENT) {
-        if(event_id == WIFI_EVENT_AP_STOP) {
-            
-        }
-    }
-}
-
-// static inline void* callocPrefPSRAM(size_t sz) {
-//     void* m = heap_caps_calloc(sz,MALLOC_CAP_SPIRAM);
-//     if(m == NULL) {
-//         m = heap_caps_calloc(sz,MALLOC_CAP_INTERNAL);
-//     }
-//     return m;
-// }
 
 /* Handler for WiFi scan endpoint */
 static esp_err_t GET_wifi_scan(httpd_req_t *req)
@@ -1297,11 +1281,12 @@ esp_err_t start_rest_server(void * pvParameters)
 
     // Start the DNS server that will redirect all queries to the softAP IP
     const dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*" /* all A queries */, "WIFI_AP_DEF" /* softAP netif ID */);
-    dns_server_handle_t dnsHdl = start_dns_server(&dns_config);
-    evtCtx.dnsHdl = dnsHdl;
-    if(dnsHdl) {
-        wifi_event_listener_start(&evtCtx);
-    }
+    dns_server_start(dns_config.item,dns_config.num_of_entries);
+    // dns_server_handle_t dnsHdl = start_dns_server(&dns_config);
+    // evtCtx.dnsHdl = dnsHdl;
+    // if(dnsHdl) {
+    //     wifi_event_listener_start(&evtCtx);
+    // }
 
     return ESP_OK;
 err_start:

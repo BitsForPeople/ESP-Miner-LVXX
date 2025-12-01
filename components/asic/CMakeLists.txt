@@ -6,7 +6,7 @@ SRCS
     "bm1397.c"
     "serial.c"
     "crc.cpp"
-    "common.c"
+    "asic_detect.c"
     "asic.c"
     "frequency_transition_bmXX.c"
     "pll.c"

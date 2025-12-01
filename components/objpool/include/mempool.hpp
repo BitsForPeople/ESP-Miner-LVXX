@@ -92,12 +92,6 @@ namespace mempool {
 
     };
 
-    // template<typename T>
-    // concept alloc_fn_t = requires (T& f, const size_t align, const size_t sz) {
-    //     {std::invoke(f,align,sz)} -> std::convertible_to<void*>;};
-
-    // using alloc_func_t = std::function<void*(size_t,size_t)>;
-
     namespace alloc {
 
         template<auto ALLOC_FN>
@@ -124,8 +118,7 @@ namespace mempool {
         };
     }
 
-    template<typename T, size_t GROWCNT, auto ALLOC_FN> // alloc_fn_t ALLOC_FN_T = alloc_func_t>
-    // requires requires (const size_t align, const size_t sz) {{std::invoke(ALLOC_FN,align,sz)} -> std::convertible_to<void*>;}
+    template<typename T, size_t GROWCNT, auto ALLOC_FN> 
     class GrowingMemPool {
         using alloctr = alloc::Allocator<T,ALLOC_FN>;
         public:
@@ -178,15 +171,6 @@ namespace mempool {
                 }
                 return nullptr;
             }
-
-            // template<std::size_t X>
-            // void addMem(const std::span<T,X>& mem) {
-            //     if(!mem.empty()) {
-            //         for(T& obj : mem) {
-            //             pool.put(&obj);
-            //         }
-            //     }
-            // }
 
             std::span<T> doAlloc(const size_t cnt) {
                 const std::span<T> mem = alloctr::allocate(cnt);

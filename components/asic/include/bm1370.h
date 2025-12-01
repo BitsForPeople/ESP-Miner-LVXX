@@ -1,7 +1,6 @@
 #ifndef BM1370_H_
 #define BM1370_H_
 
-#include "common.h"
 #include "mining.h"
 #include "asic_drvr.h"
 #include "global_state.h"

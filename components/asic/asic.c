@@ -1,8 +1,9 @@
 #include <string.h>
 #include <assert.h>
 
-#include <esp_log.h>
 #include <sdkconfig.h>
+#include <esp_log.h>
+#include <esp_log_buffer.h>
 
 #include "bm1397.h"
 #include "bm1366.h"
@@ -12,6 +13,8 @@
 #include "asic.h"
 #include "device_config.h"
 #include "frequency_transition_bmXX.h"
+#include "serial.h"
+#include "crc.h"
 
 static const char* const TAG = "asic";
 
@@ -86,3 +89,4 @@ bool ASIC_set_frequency(GlobalState * GLOBAL_STATE, float frequency)
     do_frequency_transition(frequency,GLOBAL_STATE->asic_drvr->send_frequency);
     return true;
 }
+

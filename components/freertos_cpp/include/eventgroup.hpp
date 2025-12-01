@@ -3,7 +3,7 @@
 #include <freertos/event_groups.h>
 
 namespace freertos {
-    
+
     class EventGroup {
         public:
         EventGroup(void) {
@@ -32,6 +32,12 @@ namespace freertos {
 
         EventBits_t waitForAnyBit(const EventBits_t bits, const TickType_t maxWait = portMAX_DELAY) {
             return xEventGroupWaitBits(hdl,bits,bits,0,maxWait);
+        }
+
+        EventBits_t sync(const EventBits_t bitsToSet,
+            const EventBits_t bitsToWaitFor,
+            const TickType_t maxWait = portMAX_DELAY ) {
+            return xEventGroupSync(hdl, bitsToSet, bitsToWaitFor, maxWait);
         }
 
         private:

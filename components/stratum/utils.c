@@ -61,9 +61,6 @@ static inline void* pplus(void* p, int i) {
 }
 
 void flip32bytes(void* dst, const void* src) {
-    // uintptr_t d = (uintptr_t)dest;
-    // uintptr_t s = (uintptr_t)src;
-
     uint32_t dummy;
     asm (
         "EE.LD.128.USAR.IP q0, %[src], 16" "\n"
@@ -81,6 +78,8 @@ void flip32bytes(void* dst, const void* src) {
         : [src] "+r" (src), "=m" (dummy)
         : "m" (*(const uint8_t(*)[32])src)
     );    
+
+    // Endianness reversed. Now just get the result back into RAM:
 
     uintptr_t off = (((uintptr_t)dst + 15) & ~0xf) - (uintptr_t)dst;
     if(off == 0) {
@@ -187,19 +186,10 @@ size_t bin2hex(const uint8_t *buf, size_t buflen, char *hex, size_t hexlen)
         hex[1] = HEXCHARS[b & 0xf];
         hex += 2;
         buf += 1;
-        // if (hex2char(buf[i] >> 4, &hex[2 * i]) < 0)
-        // {
-        //     return 0;
-        // }
-        // if (hex2char(buf[i] & 0xf, &hex[2 * i + 1]) < 0)
-        // {
-        //     return 0;
-        // }
     }
 
     hex[0] = '\0';
 
-    // hex[2 * buflen] = '\0';
     return 2 * buflen;
 }
 
@@ -240,10 +230,10 @@ static inline unsigned hexchar2bin(const unsigned ch) {
     */
 
     // With conditional move:
-    // unsigned a = (x < 0) ? ('A'-10-('0' & ~(1<<5))) : 0;
+    // unsigned a = (x < 0) ? (A_OFF-Z_OFF) : 0;
 
     // Without conditional move:
-    unsigned a = (x >> 31) & (A_OFF-Z_OFF);
+    uint32_t a = (x >> 31) & (A_OFF-Z_OFF);
     return x+a;
 }
 
@@ -268,22 +258,6 @@ size_t hex2bin(const char *hex, uint8_t *bin, size_t bin_len)
     } else {
         return byteCnt;
     }
-    // size_t len = 0;
-
-    // while (*hex && len < bin_len)
-    // {
-    //     bin[len] = hex2val(*hex++) << 4;
-
-    //     if (!*hex)
-    //     {
-    //         len++;
-    //         break;
-    //     }
-
-    //     bin[len++] |= hex2val(*hex++);
-    // }
-
-    // return len;
 }
 
 void print_hex(const uint8_t *b, size_t len,
@@ -292,12 +266,14 @@ void print_hex(const uint8_t *b, size_t len,
     size_t i = 0;
     const uint8_t *end = b + len;
 
-    if (prefix == NULL)
-    {
+    if (prefix == NULL) {
         prefix = "";
+    } else
+    {
+        printf("%s", prefix);
     }
 
-    printf("%s", prefix);
+    
     while (b < end)
     {
         if (++i > in_line)
@@ -313,7 +289,7 @@ void print_hex(const uint8_t *b, size_t len,
 
 char *double_sha256(const char *hex_string)
 {
-    size_t bin_len = strlen(hex_string) / 2;
+    size_t bin_len = mem_strlen(hex_string) / 2;
     uint8_t *bin = malloc(bin_len);
     hex2bin(hex_string, bin, bin_len);
 
@@ -331,33 +307,21 @@ char *double_sha256(const char *hex_string)
 
 void double_sha256_bin(const uint8_t *data, const size_t data_len, Hash_t* const out_hash)
 {
-    // uint8_t first_hash_output[32];
-    // uint8_t *second_hash_output = malloc(32);
-
-    // mbedtls_sha256(data, data_len, first_hash_output, 0);
-    // mbedtls_sha256(first_hash_output, 32, second_hash_output, 0);
-
-    // return second_hash_output;
     mbedtls_sha256(data, data_len, out_hash->u8, 0);
     mbedtls_sha256(out_hash->u8, 32, out_hash->u8, 0);
 }
 
 void single_sha256_bin(const uint8_t *data, const size_t data_len, uint8_t *dest)
 {
-    // mbedtls_sha256(data, data_len, dest, 0);
-
     // Initialize SHA256 context
     mbedtls_sha256_context sha256_ctx;
     mbedtls_sha256_init(&sha256_ctx);
     mbedtls_sha256_starts(&sha256_ctx, 0);
 
     // Compute first SHA256 hash of header
-    mbedtls_sha256_update(&sha256_ctx, data, 64);
+    mbedtls_sha256_update(&sha256_ctx, data, data_len);
     // unsigned char hash[32];
     mbedtls_sha256_finish(&sha256_ctx, dest);
-
-    // Compute midstate from hash
-    // memcpy(dest, hash, 32);
 }
 
 void midstate_sha256_bin(const uint8_t *data, const size_t data_len, uint8_t *dest)

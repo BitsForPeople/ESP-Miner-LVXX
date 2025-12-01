@@ -1,7 +1,11 @@
 #ifndef SERIAL_H_
 #define SERIAL_H_
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "esp_err.h"
+
 
 typedef enum
 {

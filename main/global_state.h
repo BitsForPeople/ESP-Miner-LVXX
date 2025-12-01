@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "asic_task.h"
-#include "common.h"
+// #include "common.h"
 #include "power_management_task.h"
 #include "statistics_task.h"
 #include "serial.h"

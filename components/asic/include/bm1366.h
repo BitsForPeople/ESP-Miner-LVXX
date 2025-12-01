@@ -7,7 +7,6 @@
     extern "C" {
 #endif
 
-#include "common.h"
 #include "mining.h"
 #include "global_state.h"
 

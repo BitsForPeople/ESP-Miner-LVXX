@@ -3,6 +3,7 @@
 #include "global_state.h"
 #include "mining.h" // bm_job
 #include "device_config.h" // enum Asic
+#include "task_result.h"
 
 #ifdef __cplusplus
 extern "C" {

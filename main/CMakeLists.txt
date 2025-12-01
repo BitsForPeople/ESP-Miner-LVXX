@@ -43,7 +43,6 @@ SRCS
     "./power/asic_reset.c"
 
     "cjson_helper.c"
-    "./http_server/wifi_event_listener.c"
 
 INCLUDE_DIRS
     "."

@@ -46,9 +46,7 @@ void calculate_merkle_root_hash_bin(const MemSpan_t coinbase_tx,
      const HashLink_t* merkles, Hash_t* const out_hash);
 
 void calculate_merkle_root_hash(const char *coinbase_tx, const uint8_t merkle_branches[][32], const int num_merkle_branches, Hash_t* out_hash);
-void calculate_merkle_root_hash2(const char *coinbase_tx, const HashLink_t* merkles, Hash_t* const out_hash);
 
-// bm_job construct_bm_job(mining_notify *params, const char *merkle_root, const uint32_t version_mask, uint32_t difficulty);
 void construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, const uint32_t version_mask, const uint32_t difficulty, bm_job* out_job);
 
 uint64_t test_nonce_value(const bm_job *job, const uint32_t nonce, const uint32_t rolled_version);

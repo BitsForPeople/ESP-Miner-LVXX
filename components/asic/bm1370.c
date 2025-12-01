@@ -10,7 +10,9 @@
 #include "freertos/task.h"
 #include "frequency_transition_bmXX.h"
 #include "pll.h"
+
 #include "asic_utils.h"
+#include "asic_detect.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -233,7 +235,7 @@ uint8_t BM1370_init(float frequency, uint16_t asic_count, uint16_t difficulty)
 
     //set difficulty mask
     uint8_t difficulty_mask[6];
-    get_difficulty_mask(difficulty, difficulty_mask);
+    ASIC_get_difficulty_mask(difficulty, difficulty_mask);
     _send_BM1370((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1370_SERIALTX_DEBUG);    
 
     //Analog Mux Control -- not sent on S21 Pro?
@@ -333,8 +335,8 @@ void BM1370_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job)
     memcpy(&job.ntime, &next_bm_job->ntime, 4);
     // memcpy(job.merkle_root, next_bm_job->merkle_root_be, 32);
     // memcpy(job.prev_block_hash, next_bm_job->prev_block_hash_be, 32);
-    asic_cpy_hash_reverse_words(next_bm_job->merkle_root, job.merkle_root);
-    asic_cpy_hash_reverse_words(next_bm_job->prev_block_hash, job.prev_block_hash);
+    ASIC_cpy_hash_reverse_words(next_bm_job->merkle_root, job.merkle_root);
+    ASIC_cpy_hash_reverse_words(next_bm_job->prev_block_hash, job.prev_block_hash);
     memcpy(&job.version, &next_bm_job->version, 4);
 
     if (GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[job.job_id] != NULL) {
@@ -359,7 +361,7 @@ task_result * BM1370_process_work(GlobalState * GLOBAL_STATE)
 {
     bm1370_asic_result_t asic_result = {0};
 
-    if (receive_work((uint8_t *)&asic_result, sizeof(asic_result)) == ESP_FAIL) {
+    if (ASIC_receive_work((uint8_t *)&asic_result, sizeof(asic_result)) == ESP_FAIL) {
         return NULL;
     }
 
@@ -375,8 +377,6 @@ task_result * BM1370_process_work(GlobalState * GLOBAL_STATE)
     uint8_t small_core_id = asic_result.job_id & 0x0f; // BM1370 has 16 small cores, so it should be coded on 4 bits
     uint32_t version_bits = (ntohs(asic_result.version) << 13); // shift the 16 bit value left 13
     ESP_LOGI(TAG, "Job ID: %02X, Core: %d/%d, Ver: %08" PRIX32, job_id, core_id, small_core_id, version_bits);
-
-    // GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
 
     if (GLOBAL_STATE->valid_jobs[job_id] == 0) {
         ESP_LOGW(TAG, "Invalid job nonce found, 0x%02X", job_id);
