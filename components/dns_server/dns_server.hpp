@@ -88,10 +88,6 @@ namespace dnss {
         static constexpr const char* TAG = "DNSServerInst";
         public:
 
-        // bool start(const dns_server_config_t* cfg) {
-        //     freertos::Lck lck {mutex.acquire()};
-        // }
-
         bool xchSock(int oldVal, int newVal) {
             return sock.compare_exchange_strong(oldVal,newVal);
         }

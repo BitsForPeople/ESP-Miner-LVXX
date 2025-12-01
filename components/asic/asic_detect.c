@@ -9,7 +9,7 @@
 
 #define PREAMBLE 0xAA55
 
-static const char * const TAG = "common";
+static const char * const TAG = "asic_detect";
 
 static const uint8_t READ_REG0_CMD[] = {0x55, 0xAA, 0x52, 0x05, 0x00, 0x00, 0x0A};
 
@@ -64,48 +64,15 @@ static inline bool isValidShrtResponse(const uint8_t* const data, const unsigned
 static inline int rx(uint8_t* const out, unsigned len) {
     int r = SERIAL_rx(out,len,RESP_WAIT_MS);
     if(r < 0) {
-        ESP_LOGE(TAG, "ASIC_detect: Error reading ASIC response: %d",r);
+        ESP_LOGE(TAG, "Error reading ASIC response: %d",r);
     }
     return r;
 }
 
 
 
-static int countChipResponses(uint32_t rspLen, uint8_t* const buf) {
-    int cnt = 0;
-
-    int r;
-    do {
-        const uint16_t pre = *(const uint16_t*)buf;
-        if( pre == RX_PREAMBL) {
-            if(crc5_valid(buf+2, rspLen-2)) {
-                cnt += 1;
-            } else {
-                ESP_LOGE(TAG, "ASIC_detect: CRC error in response!");
-                return -cnt;
-            }
-        } else {
-            ESP_LOGE(TAG, "ASIC_detect: Invalid preamble: 0x%" PRIx16, pre);
-            return -cnt;
-        }
-    } while ( (r = rx( buf, rspLen )) == rspLen );
-
-    if(r == 0) {
-        return cnt;
-    } else {
-        if(r > 0) {
-            ESP_LOGE(TAG, "ASIC_detect: Error reading ASIC response: %" PRIu32 " bytes expected, %d received.",
-                rspLen,
-                r
-            );
-        }
-        return -cnt;
-    }
-}
 
 int ASIC_detect(uint16_t* const out_chip_id) {
-
-
 
     static const unsigned RSP_SHRT = sizeof(ReadRegRspShrt_t);
     static const unsigned RSP_LONG = sizeof(ReadRegRspLong_t);
@@ -113,31 +80,6 @@ int ASIC_detect(uint16_t* const out_chip_id) {
 
 
     SERIAL_send(READ_REG0_CMD,sizeof(READ_REG0_CMD),false);
-
-    // union {
-    //     ReadRegBase_t base;
-    //     ReadRegRspLong_t lng; 
-    //     ReadRegRspShrt_t shrt[2];
-    //     uint8_t u8[sizeof(ReadRegRspShrt_t)*2];
-    // } rxBuf_;
-
-    // uint8_t* buf = rxBuf_.u8;
-    // int r = SERIAL_rx(buf,RSP_LONG,100);
-
-    // if(r >= RSP_SHRT) {
-    //     unsigned rspLen = RSP_SHRT;
-
-    //     if(isValidLongResponse(rxBuf,r)) {
-    //         rspLen = RSP_LONG;
-    //     } else
-    //     if(isValidShrtResponse(rxBuf,r)) {
-    //         if(r > RSP_SHRT) {
-    //             buf = (uint8_t*)&(rxBuf_.shrt[1]);
-    //         }
-    //     } else {
-    //         ESP_LOGE(TAG, "Fail.");
-    //     }
-    // }
 
     union {
         ReadRegBase_t base;
@@ -162,39 +104,8 @@ int ASIC_detect(uint16_t* const out_chip_id) {
                     if(out_chip_id) {
                         *out_chip_id = __builtin_bswap16(rxBuf.base.regVal1);
                     }
-                    ESP_LOGD(TAG, "ASIC_detect: Found chip 0x%" PRIx16, __builtin_bswap16(rxBuf.base.regVal1));
+                    ESP_LOGD(TAG, "Found chip 0x%" PRIx16, __builtin_bswap16(rxBuf.base.regVal1));
 
-                    // All good handling the first response. Prepare for any next response(s).
-                    // if (r == RSP_LONG) {
-                    //     if(!isLong) {
-                    //         // Read the rest of the 2nd chip's short response:
-                    //         r = SERIAL_rx( rxBuf.u8 + RSP_DIFF, rspLen-RSP_DIFF, 100 );
-                    //         if(r >= 0) {
-                    //             r += RSP_DIFF;
-                    //         }
-                    //     } else {
-                    //         // Read the 2nd chip's long response:
-                    //         r = SERIAL_rx( rxBuf.u8, rspLen, 100);
-                    //     }
-
-                    //     if(r == rspLen) {
-                    //         // Got one more. Check and count this and any other responses.
-                    //         int c = countChipResponses(rspLen,rxBuf.u8);
-                    //         if(c >= 0) {
-                    //             cnt = cnt + c;
-                    //         } else {
-                    //             cnt = -cnt + c;
-                    //         }
-                    //     } else {
-                    //         if(r < 0) {
-                    //             ESP_LOGE(TAG, "ASIC_detect: Error reading response: %d",r);
-                    //         }
-                    //         if(!isLong) {
-                    //             // We got more data than 1 short response, but not enough for 2?!
-                    //             ESP_LOGW(TAG, "ASIC_detect: Partial response: %d");
-                    //         }
-                    //     }
-                    // }
                     if (r == RSP_LONG) {
                         if(!isLong) {
                             // We read too many bytes. Correct for that.
@@ -225,18 +136,18 @@ int ASIC_detect(uint16_t* const out_chip_id) {
                             r = rx( rxBuf.u8, rspLen );
                         }
                         if(err) {
-                            ESP_LOGE(TAG, "ASIC_detect: Error at chip #%d", cnt);
+                            ESP_LOGE(TAG, "Error at chip #%d", cnt);
                             cnt = -cnt;
                         }
                     }
                 } else {
-                    ESP_LOGE(TAG, "ASIC_detect: CRC error in response!");
+                    ESP_LOGE(TAG, "CRC error in response!");
                 }    
             } else {
-                ESP_LOGE(TAG, "ASIC_detect: Invalid preamble: 0x%" PRIx16, rxBuf.base.preamble);
+                ESP_LOGE(TAG, "Invalid preamble: 0x%" PRIx16, rxBuf.base.preamble);
             }            
         } else {
-            ESP_LOGE(TAG, "ASIC_detect: Failed to get ASIC response (got %d bytes)",r);
+            ESP_LOGE(TAG, "Failed to get ASIC response (got %d bytes)",r);
         }
         if(cnt <= 0) {
             // Something went wrong.
@@ -246,7 +157,7 @@ int ASIC_detect(uint16_t* const out_chip_id) {
             }
         }
     } else {
-        ESP_LOGE(TAG, "ASIC_detect: Error reading ASIC response: %d",r);
+        ESP_LOGE(TAG, "Error reading ASIC response: %d",r);
     }
     return cnt;
 }

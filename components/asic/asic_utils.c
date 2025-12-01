@@ -48,7 +48,7 @@ esp_err_t ASIC_receive_work(uint8_t * buffer, int buffer_size)
 }
 
 
-void asic_cpy_hash_reverse_words(const void* const src, void* dst) {
+void ASIC_cpy_hash_reverse_words(const void* const src, void* dst) {
     uint32_t* d = (uint32_t*)dst;
     uint32_t* const end = d + 8;
     const uint32_t* s = ((const uint32_t*)src) + 8 - 1;

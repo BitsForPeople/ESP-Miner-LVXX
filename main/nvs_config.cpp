@@ -7,14 +7,11 @@
 #include <atomic>
 
 #include <freertos/FreeRTOS.h>
-// #include <freertos/semphr.h>
 #include <freertos/event_groups.h>
 #include "mutex.hpp"
 #include "eventgroup.hpp"
 
 static const char* const NVS_CONFIG_NAMESPACE = "main"; 
-
-static constexpr std::string_view KEY_FREQ {"asicfrequency_f"};
 
 #define FLOAT_STR_LEN 32
 
@@ -22,149 +19,6 @@ static const char * const TAG = "nvs_config";
 
 static constexpr EventBits_t EB_CONFIG_CHANGED = (1<<0);
 
-// class EventGroup {
-//     public:
-//     EventGroup(void) {
-//         hdl = xEventGroupCreateStatic(&mem);
-//     }
-//     EventGroup(const EventGroup&) = delete;
-//     EventGroup(EventGroup&&) = delete;
-//     EventGroup& operator =(const EventGroup&) = delete;
-//     EventGroup& operator =(EventGroup&&) = delete;
-
-//     EventBits_t setBits(const EventBits_t bits) {
-//         return xEventGroupSetBits(hdl,bits);
-//     }
-
-//     EventBits_t clearBits(const EventBits_t bits) {
-//         return xEventGroupClearBits(hdl,bits);
-//     }
-
-//     EventBits_t getBits(void) {
-//         return xEventGroupGetBits(hdl);
-//     }
-
-//     EventBits_t waitForBits(const EventBits_t bits, const TickType_t maxWait = portMAX_DELAY) {
-//         return xEventGroupWaitBits(hdl,bits,bits,1,maxWait);
-//     }
-
-//     EventBits_t waitForAnyBit(const EventBits_t bits, const TickType_t maxWait = portMAX_DELAY) {
-//         return xEventGroupWaitBits(hdl,bits,bits,0,maxWait);
-//     }
-
-//     private:
-//     StaticEventGroup_t mem {};
-//     EventGroupHandle_t hdl;
-// };
-
-// class Lck {
-//     public:
-//         static Lck take(SemaphoreHandle_t mux, const TickType_t maxWait = portMAX_DELAY) {
-//             if(mux) {
-//                 const bool acq = xSemaphoreTake(mux,maxWait) != pdFALSE;
-//                 return Lck {mux,acq};
-//             } else {
-//                 return Lck {};
-//             }
-//         }
-
-//         constexpr Lck() = default;
-        
-//         constexpr Lck(SemaphoreHandle_t mux, bool acquired) : mux {mux}, acq {acquired && (mux != nullptr)} {
-
-//         }
-
-//         constexpr Lck(Lck&& other) : mux {other.mux}, acq {other.acq} {
-//             other.mux = nullptr;
-//             other.acq = false;
-//         }
-
-//         constexpr Lck(const Lck&) = delete;
-
-//         constexpr Lck& operator =(const Lck&) = delete;
-//         constexpr Lck& operator =(Lck&& other) {
-//             this->release();
-
-//             this->mux = other.mux;
-//             this->acq = other.acq;
-
-//             other.mux = nullptr;
-//             other.acq = false;
-
-//             return *this;
-//         }
-
-//         constexpr explicit operator bool() const {
-//             return acquired();
-//         }
-
-//         constexpr bool acquired() const {
-//             return acq;
-//         }
-
-//         void release() {
-//             if(acq) {
-//                 if(mux) {
-//                     xSemaphoreGive(mux);
-//                 }
-//                 this->acq = false;
-//             }
-//         }
-
-//         ~Lck() {
-//             if(acq && mux) {
-//                 xSemaphoreGive(mux);
-//             }
-//         }
-//     private:
-//         SemaphoreHandle_t mux {nullptr};
-//         bool acq {false};
-// };
-
-// class Mutex {
-//     public:
-//         Mutex() {
-//             handle = xSemaphoreCreateMutexStatic(&mutexMem);        
-//         }
-
-//         Mutex(const Mutex&) = delete;
-//         Mutex(Mutex&&) = delete;
-
-//         SemaphoreHandle_t getHandle(void) const {
-//             return this->handle;
-//         }
-
-//         operator SemaphoreHandle_t(void) const {
-//             return getHandle();
-//         }
-
-//         Lck acquire(const TickType_t maxWait = portMAX_DELAY) {
-//             return Lck::take(handle,maxWait);
-//         }
-
-
-//         bool take(const TickType_t maxWait = portMAX_DELAY) {
-//             return xSemaphoreTake(handle,maxWait);
-//         }
-
-//         bool give(void) {
-//             return xSemaphoreGive(handle);
-//         }
-
-
-//         bool takeFromISR(void) {
-//             BaseType_t dummy;
-//             return xSemaphoreTakeFromISR(handle, &dummy);
-//         }
-
-//         bool giveFromISR(BaseType_t& should_yield) {
-//             return xSemaphoreGiveFromISR(handle,&should_yield);
-//         }
-
-//     private:
-//         SemaphoreHandle_t handle {nullptr};
-//         StaticSemaphore_t mutexMem {};
-// };
 
 template<typename T, auto R, auto W>
 struct NVS_ops {
@@ -216,24 +70,10 @@ struct NVS_op<float> {
     }
     static esp_err_t read(nvs_handle_t handle, const char* const key, float& out_value) {
 
-        // const std::string_view k {key};
-        // const bool freqKey = k == KEY_FREQ;
-
-        // if(freqKey) {
-        //     ESP_LOGE(TAG, "Read asic freq.");
-        // }
-
         char str_value[FLOAT_STR_LEN] = {};
         size_t sz = sizeof(str_value)-1;
 
         esp_err_t r = NVS_op<char*>::read(handle,key,str_value,sz);
-
-        // if(freqKey) {
-        //     ESP_LOGE(TAG, "Err: %d, sz: %" PRIu32,r,(uint32_t)sz);
-        //     if(r == ESP_OK) {
-        //         ESP_LOGE(TAG, "value: \"%s\"",str_value);
-        //     }
-        // }
 
         if(r == ESP_OK) {
             if(sz != 0) {
@@ -262,6 +102,7 @@ class NvsCtx {
     NvsCtx(NvsCtx&&) = delete;
     NvsCtx(const NvsCtx&) = delete;
 
+    [[nodiscard]]
     freertos::Lck acquire(const TickType_t maxWait = portMAX_DELAY) {
         return mutex.acquire(maxWait);
     }
