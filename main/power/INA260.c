@@ -4,7 +4,7 @@
 #include "i2c_bitaxe.h"
 #include "INA260.h"
 
-static const char *TAG = "INA260";
+static const char* const TAG = "INA260";
 
 static i2c_master_dev_handle_t ina260_dev_handle;
 
@@ -31,7 +31,7 @@ float INA260_read_current(void)
     ESP_ERROR_CHECK(i2c_bitaxe_register_read(ina260_dev_handle, INA260_REG_CURRENT, data, 2));
     // ESP_LOGI(TAG, "Raw Current = %02X %02X", data[1], data[0]);
 
-    return (uint16_t)(data[1] | (data[0] << 8)) * 1.25;
+    return (uint16_t)(data[1] | (data[0] << 8)) * 1.25f;
 }
 
 float INA260_read_voltage(void)
@@ -41,7 +41,7 @@ float INA260_read_voltage(void)
     ESP_ERROR_CHECK(i2c_bitaxe_register_read(ina260_dev_handle, INA260_REG_BUSVOLTAGE, data, 2));
     // ESP_LOGI(TAG, "Raw Voltage = %02X %02X", data[1], data[0]);
 
-    return (uint16_t)(data[1] | (data[0] << 8)) * 1.25;
+    return (uint16_t)(data[1] | (data[0] << 8)) * 1.25f;
 }
 
 float INA260_read_power(void)

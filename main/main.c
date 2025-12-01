@@ -21,12 +21,19 @@
 #include "connect.h"
 #include "asic_reset.h"
 
+#include "cjson_helper.h"
+// #include "ptrqueue.h"
+
+// static PtrqueueMem_t stratumQueueMem;
+// static PtrqueueMem_t asicJobsQueueMem;
+
 static GlobalState GLOBAL_STATE;
 
-static const char * TAG = "bitaxe";
+static const char * const TAG = "bitaxe";
 
 void app_main(void)
 {
+
     ESP_LOGI(TAG, "Welcome to the bitaxe - FOSS || GTFO!");
 
     if (!esp_psram_is_initialized()) {
@@ -34,6 +41,7 @@ void app_main(void)
         GLOBAL_STATE.psram_is_available = false;
     } else {
         GLOBAL_STATE.psram_is_available = true;
+        cjson_use_psram(true);
     }
 
     // Init I2C
@@ -67,19 +75,19 @@ void app_main(void)
 
     SYSTEM_init_peripherals(&GLOBAL_STATE);
 
-    xTaskCreate(POWER_MANAGEMENT_task, "power management", 8192, (void *) &GLOBAL_STATE, 10, NULL);
+    // xTaskCreate(POWER_MANAGEMENT_task, "power management", 8192, (void *) &GLOBAL_STATE, 10, NULL);
 
     //start the API for AxeOS
     start_rest_server((void *) &GLOBAL_STATE);
 
     // Initialize BAP interface
-    esp_err_t bap_ret = BAP_init(&GLOBAL_STATE);
-    if (bap_ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize BAP interface: %d", bap_ret);
-        // Continue anyway, as BAP is not critical for core functionality
-    } else {
-        ESP_LOGI(TAG, "BAP interface initialized successfully");
-    }
+    // esp_err_t bap_ret = BAP_init(&GLOBAL_STATE);
+    // if (bap_ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "Failed to initialize BAP interface: %d", bap_ret);
+    //     // Continue anyway, as BAP is not critical for core functionality
+    // } else {
+    //     ESP_LOGI(TAG, "BAP interface initialized successfully");
+    // }
 
     while (!GLOBAL_STATE.SYSTEM_MODULE.is_connected) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -87,6 +95,9 @@ void app_main(void)
 
     queue_init(&GLOBAL_STATE.stratum_queue);
     queue_init(&GLOBAL_STATE.ASIC_jobs_queue);
+
+    // GLOBAL_STATE.stratum_queue_hdl = ptrqueue_init(&stratumQueueMem);
+    // GLOBAL_STATE.asic_jobs_queue_hdl = ptrqueue_init(&asicJobsQueueMem);
 
     if (asic_reset() != ESP_OK) {
         GLOBAL_STATE.SYSTEM_MODULE.asic_status = "ASIC reset failed";
@@ -107,9 +118,11 @@ void app_main(void)
 
     GLOBAL_STATE.ASIC_initalized = true;
 
-    xTaskCreate(stratum_task, "stratum admin", 8192, (void *) &GLOBAL_STATE, 5, NULL);
-    xTaskCreate(create_jobs_task, "stratum miner", 8192, (void *) &GLOBAL_STATE, 10, NULL);
-    xTaskCreate(ASIC_task, "asic", 8192, (void *) &GLOBAL_STATE, 10, NULL);
-    xTaskCreate(ASIC_result_task, "asic result", 8192, (void *) &GLOBAL_STATE, 15, NULL);
-    xTaskCreate(statistics_task, "statistics", 8192, (void *) &GLOBAL_STATE, 3, NULL);
+    xTaskCreatePinnedToCore(POWER_MANAGEMENT_task, "power management", 8192, (void *) &GLOBAL_STATE, 10, NULL, 0);
+    xTaskCreatePinnedToCore(stratum_task, "stratum admin", 8192, (void *) &GLOBAL_STATE, 5, NULL, 0);
+
+    xTaskCreatePinnedToCore(create_jobs_task, "stratum miner", 8192, (void *) &GLOBAL_STATE, 10, NULL, 1);
+    xTaskCreatePinnedToCore(ASIC_task, "asic", 8192, (void *) &GLOBAL_STATE, 10, NULL, 1);
+    xTaskCreatePinnedToCore(ASIC_result_task, "asic result", 8192, (void *) &GLOBAL_STATE, 15, NULL, 1);
+    
 }

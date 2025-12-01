@@ -407,9 +407,12 @@ bool self_test(void * pvParameters)
     hex2bin("c4f5ab01913fc186d550c1a28f3f3e9ffaca2016b961a6a751f8cca0089df924", merkles[11], 32);
     hex2bin("cff737e1d00176dd6bbfa73071adbb370f227cfb5fba186562e4060fcec877e1", merkles[12], 32);
 
-    char * merkle_root = calculate_merkle_root_hash(coinbase_tx, merkles, num_merkles);
+    Hash_t merkle_root;
+    // char * merkle_root = calculate_merkle_root_hash(coinbase_tx, merkles, num_merkles);
+    calculate_merkle_root_hash(coinbase_tx, merkles, num_merkles,&merkle_root);    
 
-    bm_job job = construct_bm_job(&notify_message, merkle_root, 0x1fffe000, 1000000);
+    bm_job job;
+    construct_bm_job(&notify_message, &merkle_root, 0x1fffe000, 1000000, &job);
 
     ESP_LOGI(TAG, "Sending work");
 
@@ -508,6 +511,7 @@ static void tests_done(GlobalState * GLOBAL_STATE, bool isTestPassed)
                     // flush all pending NVS writes
                     nvs_config_commit();
                     esp_restart();
+                    __builtin_unreachable();
                 }
             }
         } else {

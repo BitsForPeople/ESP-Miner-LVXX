@@ -1,0 +1,27 @@
+menu "ASIC support"
+
+    config ASIC_BM1366_ENABLED
+        bool "BM1366"
+        default y
+        help
+            If enabled, support for the BM1366 ASIC will be included in the firmware.
+
+    config ASIC_BM1368_ENABLED
+        bool "BM1368"
+        default y
+        help
+            If enabled, support for the BM1368 ASIC will be included in the firmware.
+
+    config ASIC_BM1370_ENABLED
+        bool "BM1370"
+        default y
+        help
+            If enabled, support for the BM1370 ASIC will be included in the firmware.
+
+    config ASIC_BM1397_ENABLED
+        bool "BM1397"
+        default y
+        help
+            If enabled, support for the BM1397 ASIC will be included in the firmware.
+
+endmenu

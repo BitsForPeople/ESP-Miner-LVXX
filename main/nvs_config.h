@@ -2,7 +2,13 @@
 #define MAIN_NVS_CONFIG_H
 
 #include <stdint.h>
+#include <freertos/FreeRTOS.h>
 
+#ifdef __cplusplus
+    // #pragma GCC diagnostic push
+    // #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+    extern "C" {
+#endif
 // Max length 15
 
 #define NVS_CONFIG_WIFI_SSID "wifissid"
@@ -70,5 +76,28 @@ void nvs_config_set_u64(const char * key, const uint64_t value);
 float nvs_config_get_float(const char *key, float default_value);
 void nvs_config_set_float(const char *key, float value);
 void nvs_config_commit(void);
+
+/**
+ * @brief Returns the number of times the config was written to since boot.
+ * Can be used to check for possible updates on config values: If two 
+ * successive calls to \c nvs_config_get_modcount() return the same value,
+ * \e no config values were modified between the calls.
+ * 
+ * @return NVS config modification count since boot.
+ */
+uint32_t nvs_config_get_modcount(void);
+
+/**
+ * @brief 
+ * 
+ * @param maxWait 
+ * @return true A config modification occurred
+ * @return false \p maxWait expired without any config modification
+ */
+bool nvs_config_wait_for_modification(TickType_t maxWait);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // MAIN_NVS_CONFIG_H

@@ -1,7 +1,9 @@
 #include <sys/time.h>
 #include <limits.h>
 
-#include "work_queue.h"
+// #include "work_queue.h"
+#include "ptrqueue.h"
+
 #include "global_state.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -9,8 +11,20 @@
 #include "string.h"
 
 #include "asic.h"
+#include "mining_types.h"
+#include "bm_job_pool.h"
 
-static const char *TAG = "create_jobs_task";
+static const char* const TAG = "create_jobs_task";
+
+#define MAX_COINBASE_SIZE  256
+
+static uint8_t coinbase_tx_buf[MAX_COINBASE_SIZE];
+
+static const MemSpan_t COINBASE_BUF_SPAN = {
+        .start = coinbase_tx_buf,
+        .size = sizeof(coinbase_tx_buf)
+    };
+
 
 #define QUEUE_LOW_WATER_MARK 10 // Adjust based on your requirements
 
@@ -21,10 +35,16 @@ void create_jobs_task(void *pvParameters)
 {
     GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
 
-    uint32_t difficulty = GLOBAL_STATE->pool_difficulty;
+    if(bmjobpool_get_size() == 0) {
+        // Expected number of active + queued jobs
+        bmjobpool_grow_by((128/8)+QUEUE_LOW_WATER_MARK);
+    }
+
     while (1)
     {
+        asm volatile ("":"+m" (*GLOBAL_STATE));
         mining_notify *mining_notification = (mining_notify *)queue_dequeue(&GLOBAL_STATE->stratum_queue);
+
         if (mining_notification == NULL) {
             ESP_LOGE(TAG, "Failed to dequeue mining notification");
             vTaskDelay(100 / portTICK_PERIOD_MS); // Wait a bit before trying again
@@ -33,10 +53,13 @@ void create_jobs_task(void *pvParameters)
 
         ESP_LOGI(TAG, "New Work Dequeued %s", mining_notification->job_id);
 
+        // uint32_t difficulty = GLOBAL_STATE->pool_difficulty;
+        // difficulty = GLOBAL_STATE->pool_difficulty;
+
         if (GLOBAL_STATE->new_set_mining_difficulty_msg)
         {
             ESP_LOGI(TAG, "New pool difficulty %lu", GLOBAL_STATE->pool_difficulty);
-            difficulty = GLOBAL_STATE->pool_difficulty;
+            // difficulty = GLOBAL_STATE->pool_difficulty;
             GLOBAL_STATE->new_set_mining_difficulty_msg = false;
         }
 
@@ -51,7 +74,8 @@ void create_jobs_task(void *pvParameters)
         {
             if (should_generate_more_work(GLOBAL_STATE))
             {
-                generate_work(GLOBAL_STATE, mining_notification, extranonce_2, difficulty);
+                // difficulty = GLOBAL_STATE->pool_difficulty;
+                generate_work(GLOBAL_STATE, mining_notification, extranonce_2, GLOBAL_STATE->pool_difficulty);
 
                 // Increase extranonce_2 for the next job.
                 extranonce_2++;
@@ -66,7 +90,8 @@ void create_jobs_task(void *pvParameters)
         if (GLOBAL_STATE->abandon_work == 1)
         {
             GLOBAL_STATE->abandon_work = 0;
-            ASIC_jobs_queue_clear(&GLOBAL_STATE->ASIC_jobs_queue);
+
+            queue_consume_all(&GLOBAL_STATE->ASIC_jobs_queue,&free_bm_job_from_queue);
             xSemaphoreGive(GLOBAL_STATE->ASIC_TASK_MODULE.semaphore);
         }
 
@@ -89,39 +114,41 @@ static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification
     //print generated extranonce_2
     //ESP_LOGI(TAG, "Generated extranonce_2: %s", extranonce_2_str);
 
-    char *coinbase_tx = construct_coinbase_tx(notification->coinbase_1, notification->coinbase_2, GLOBAL_STATE->extranonce_str, extranonce_2_str);
-    if (coinbase_tx == NULL) {
-        ESP_LOGE(TAG, "Failed to construct coinbase_tx");
-        free(extranonce_2_str);
-        return;
+    Hash_t merkle_root;
+    {
+        MemSpan_t cbtx = 
+            construct_coinbase_tx_bin(
+                notification->coinbase_1, notification->coinbase_2, GLOBAL_STATE->extranonce_str, extranonce_2_str,
+                COINBASE_BUF_SPAN);
+
+        if(cbtx.size == 0) {
+            ESP_LOGE(TAG, "Failed to construct coinbase tx.");
+            return;
+        }
+        calculate_merkle_root_hash_bin(cbtx,notification->merkle__branches,&merkle_root);
     }
 
-    char *merkle_root = calculate_merkle_root_hash(coinbase_tx, (uint8_t(*)[32])notification->merkle_branches, notification->n_merkle_branches);
-    if (merkle_root == NULL) {
-        ESP_LOGE(TAG, "Failed to calculate merkle_root");
-        free(extranonce_2_str);
-        free(coinbase_tx);
-        return;
+
+    
+    bm_job* const queued_next_job = bmjobpool_take();
+    
+    if(false) {
+        bmjobpool_log_stats();
     }
 
-    bm_job next_job = construct_bm_job(notification, merkle_root, GLOBAL_STATE->version_mask, difficulty);
-
-    bm_job *queued_next_job = malloc(sizeof(bm_job));
     if (queued_next_job == NULL) {
         ESP_LOGE(TAG, "Failed to allocate memory for queued_next_job");
         free(extranonce_2_str);
-        free(coinbase_tx);
-        free(merkle_root);
         return;
-    }
+    }    
+    construct_bm_job(notification, &merkle_root, GLOBAL_STATE->version_mask, difficulty, queued_next_job);
 
-    memcpy(queued_next_job, &next_job, sizeof(bm_job));
     queued_next_job->extranonce2 = extranonce_2_str; // Transfer ownership
     queued_next_job->jobid = strdup(notification->job_id);
     queued_next_job->version_mask = GLOBAL_STATE->version_mask;
 
     queue_enqueue(&GLOBAL_STATE->ASIC_jobs_queue, queued_next_job);
 
-    free(coinbase_tx);
-    free(merkle_root);
+    // free(coinbase_tx);
+    // free(merkle_root);
 }

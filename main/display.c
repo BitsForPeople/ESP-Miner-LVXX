@@ -23,12 +23,13 @@
 
 #define DISPLAY_I2C_ADDRESS    0x3C
 
-#define DEFAULT_DISPLAY        "SSD1306 (128x32)"
+// #define DEFAULT_DISPLAY        "SSD1306 (128x32)"
+#define DEFAULT_DISPLAY "SSD1309 (128x64)"
 
 #define LCD_CMD_BITS           8
 #define LCD_PARAM_BITS         8
 
-static const char * TAG = "display";
+static const char * const TAG = "display";
 
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static bool display_state_on = false;

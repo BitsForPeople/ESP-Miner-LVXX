@@ -307,13 +307,14 @@ esp_err_t BAP_start_mode_management_task(GlobalState *state) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    xTaskCreate(
+    xTaskCreatePinnedToCore(
         mode_management_task,
         "bap_mode_mgmt",
         4096,
         state,
         5,
-        NULL
+        NULL,
+        xPortGetCoreID()
     );
 
     ESP_LOGI(TAG, "BAP mode management task started");
@@ -326,13 +327,14 @@ esp_err_t BAP_start_subscription_task(GlobalState *state) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    xTaskCreate(
+    xTaskCreatePinnedToCore(
         subscription_update_task,
         "subscription_up",
         4096,
         state,
         5,
-        &subscription_task_handle
+        &subscription_task_handle,
+        xPortGetCoreID()
     );
 
     //ESP_LOGI(TAG, "Subscription update task started");

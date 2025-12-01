@@ -22,13 +22,15 @@
 #define NO_ACK_CHECK   false
 #define ACK_VALUE      0x0
 #define NACK_VALUE     0x1
-#define MAX_BLOCK_LEN  32
+// #define MAX_BLOCK_LEN  32
 
-static const char *TAG = "TPS546";
+static const char* const TAG = "TPS546";
 
-static uint8_t DEVICE_ID1[] = {0x54, 0x49, 0x54, 0x6B, 0x24, 0x41}; // TPS546D24A
-static uint8_t DEVICE_ID2[] = {0x54, 0x49, 0x54, 0x6D, 0x24, 0x41}; // TPS546D24A
-static uint8_t DEVICE_ID3[] = {0x54, 0x49, 0x54, 0x6D, 0x24, 0x62}; // TPS546D24S
+static const unsigned MAX_BLOCK_LEN = 7; // Buffer of 7+1 bytes is fine for now.
+
+static const uint8_t DEVICE_ID1[] = {0x54, 0x49, 0x54, 0x6B, 0x24, 0x41}; // TPS546D24A
+static const uint8_t DEVICE_ID2[] = {0x54, 0x49, 0x54, 0x6D, 0x24, 0x41}; // TPS546D24A
+static const uint8_t DEVICE_ID3[] = {0x54, 0x49, 0x54, 0x6D, 0x24, 0x62}; // TPS546D24S
 
 //static uint8_t COMPENSATION_CONFIG[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -36,6 +38,14 @@ static i2c_master_dev_handle_t tps546_i2c_handle[3];
 static uint16_t TPS546_I2C_ADDR[3] = {0x24, 0x7F, 0x14};
 
 static TPS546_CONFIG tps546_config;
+
+typedef struct SMBBlockBase {
+    uint8_t len;
+    uint8_t data[];
+} SMBBlockBase_t;
+
+#define SMBBlock_t(len) union {SMBBlockBase_t block; uint8_t u8[(len)+1];}
+
 
 static esp_err_t TPS546_parse_status(uint16_t, int);
 
@@ -100,17 +110,23 @@ static esp_err_t smb_write_word(uint8_t command, uint16_t data, int i2c_addr)
  * @param data Pointer to store the read data
  * @param len The number of bytes to read
  */
-static esp_err_t smb_read_block(uint8_t command, uint8_t *data, uint8_t len, int i2c_addr)
+static esp_err_t smb_read_block(uint8_t command, SMBBlockBase_t* const data, uint8_t len, int i2c_addr)
 {
+    if(len > MAX_BLOCK_LEN) {
+        ESP_LOGE(TAG, "BUG: Trying to SMB read %" PRIu8 " bytes. Increase MAX_BLOCK_LEN (is: %u)!", len, MAX_BLOCK_LEN);
+        return ESP_FAIL;
+    }
+
     //malloc a buffer len+1 to store the length byte
-    uint8_t *buf = (uint8_t *)malloc(len+1);
-    if (i2c_bitaxe_register_read(tps546_i2c_handle[i2c_addr], command, buf, len+1) != ESP_OK) {
-        free(buf);
+    // uint8_t *buf = (uint8_t *)malloc(len+1);
+    // uint8_t buf[MAX_BLOCK_LEN+1];
+    if (i2c_bitaxe_register_read(tps546_i2c_handle[i2c_addr], command, &data->len, len+1) != ESP_OK) {
+        // free(buf);
         return ESP_FAIL;
     }
     //copy the data into the buffer
-    memcpy(data, buf+1, len);
-    free(buf);
+    // memcpy(data, buf+1, len);
+    // free(buf);
 
     return ESP_OK;
 }
@@ -141,65 +157,101 @@ static esp_err_t smb_read_block(uint8_t command, uint8_t *data, uint8_t len, int
 // }
 
 /**
- * @brief Convert an SLINEAR11 value into an int
- * @param value The SLINEAR11 value to convert
+ * @brief Sign-extends the lowest \p bits of the unsigned \p uval to an \c int32_t.
+ * 
+ * @param uval 
+ * @param bits number of significant bits in \p uval (incl. sign bit); must be >= 1 and < 32!
+ * @return sign-extended value from \p uval 
  */
-static int slinear11_2_int(uint16_t value)
-{
-    int exponent, mantissa;
-    float result;
-
-    // First 5 bits is exponent in twos-complement
-    // check the first bit of the exponent to see if its negative
-    if (value & 0x8000) {
-        // exponent is negative
-        exponent = -1 * (((~value >> 11) & 0x001F) + 1);
-    } else {
-        exponent = (value >> 11);
-    }
-    // last 11 bits is the mantissa in twos-complement
-    // check the first bit of the mantissa to see if its negative
-    if (value & 0x400) {
-        // mantissa is negative
-        mantissa = -1 * ((~value & 0x03FF) + 1);
-    } else {
-        mantissa = (value & 0x03FF);
-    }
-
-    // calculate result (mantissa * 2^exponent)
-    result = mantissa * powf(2.0, exponent);
-    return (int)result;
+static inline int32_t signExtend(const uint32_t uval, const unsigned bits) {
+    return (int32_t)(uval << (32-bits)) >> (32-bits);
 }
 
 /**
  * @brief Convert an SLINEAR11 value into an int
  * @param value The SLINEAR11 value to convert
  */
-static float slinear11_2_float(uint16_t value)
+static int slinear11_2_int(const uint16_t value)
 {
-    int exponent, mantissa;
-    float result;
 
-    // First 5 bits is exponent in twos-complement
-    // check the first bit of the exponent to see if its negative
-    if (value & 0x8000) {
-        // exponent is negative
-        exponent = -1 * (((~value >> 11) & 0x001F) + 1);
-    } else {
-        exponent = (value >> 11);
-    }
-    // last 11 bits is the mantissa in twos-complement
-    // check the first bit of the mantissa to see if its negative
-    if (value & 0x400) {
-        // mantissa is negative
-        mantissa = -1 * ((~value & 0x03FF) + 1);
-    } else {
-        mantissa = (value & 0x03FF);
+    const int32_t exp = (int16_t)value >> 11;
+    const int32_t man = signExtend(value,11);
+    if(man == 0 || exp == 0) {
+        return man;
+    } else
+    if(exp < 0) {
+        return man >> (-exp);
+    }  else {
+        return man << exp;
     }
 
-    // calculate result (mantissa * 2^exponent)
-    result = mantissa * powf(2.0, exponent);
-    return result;
+}
+
+static float lshift(const float x, const int s) {
+    // Minimal variant of ldexpf() from math.h.
+    if(s != 0) {
+        union {
+            float f;
+            uint32_t u32;
+        } u;
+        u.f = x;
+        uint32_t u32 = u.u32;
+        if(u32 != 0) {
+            // Extract exponent from float:
+            uint32_t e = (u32 >> 23) & 0xff;
+            // Add shift amount to exponent:
+            e = e + s;
+            // Put exponent back into float:
+            u.u32 = (u32 & (0x807fffffu)) | ((e & 0xff) << 23);
+        }
+        return u.f;
+    } else {
+        return x;
+    }
+}
+
+
+/**
+ * @brief Convert an SLINEAR11 value into an int
+ * @param value The SLINEAR11 value to convert
+ */
+static float slinear11_2_float(const uint16_t value)
+{
+    const int32_t exp = (int16_t)value >> 11;
+    const int32_t man = signExtend(value,11);
+    if(exp == 0 || man == 0) {
+        return (float)man;
+    } else {
+        return lshift((float)man,exp);
+    } 
+}
+
+/**
+ * @brief Count Leading Redundant Sign Bits
+ * 
+ * @param value 
+ * @return number of redundant sign bits excluding the sign bit itself.
+ */
+static inline unsigned clrsb(const int32_t value) {
+    int r = __builtin_clrsb(value);
+    if(sizeof(int) != sizeof(int32_t)) {
+        r -= ((int)sizeof(int)-sizeof(int32_t)) * 8;
+    }
+    return r;
+}
+
+/**
+ * @brief Count Leading Zero bits
+ * 
+ * @param value 
+ * @return  
+ */
+static inline unsigned clz(const uint32_t value) {
+    int r = __builtin_clz(value);
+    if(sizeof(unsigned int) != sizeof(uint32_t)) {
+        r -= ((int)sizeof(int)-sizeof(uint32_t)) * 8;
+    }
+    return r;
 }
 
 /**
@@ -208,34 +260,45 @@ static float slinear11_2_float(uint16_t value)
  */
 static uint16_t int_2_slinear11(int value)
 {
-    int mantissa;
-    int exponent = 0;
-    uint16_t result = 0;
-    int i;
-
-    // First see if the exponent is positive or negative
-    if (value >= 0) {
-        // exponent is positive
-        for (i=0; i<=15; i++) {
-            mantissa = value / powf(2.0, i);
-            if (mantissa < 1024) {
-                exponent = i;
-                break;
-            }
-        }
-        if (i == 16) {
-            ESP_LOGI(TAG, "Could not find a solution");
-            return 0;
-        }
-    } else {
-        // value is negative
-        ESP_LOGI(TAG, "No negative numbers at this time");
+    if(value == 0) {
         return 0;
     }
+    const unsigned signif = 31-clrsb(value);
+    signed e = signif-10;
+    signed m = value;
+    if(e > 0) {
+        // More than 10 significant bits. Adjust to 10.
+        m = m >> e;
+    } else
+    if(e < 0) {
+        // Less than 10 significant bits. Adjust to 10.
+        m = m << (-e);
+    }
+    return (uint16_t)((e << 11) | (m & 0x07fff));
+}
 
-    result = ((exponent << 11) & 0xF800) + mantissa;
+static inline int getFloatExponent(const float value) {
+    union {
+        float f;
+        uint32_t u32;
+    } u = {.f = value};
+    return ((int)(u.u32 << 1) >> (23+1)) - 127;
+}
+static inline int32_t getFloatMantissa(const float value) {
+    static const uint32_t MANTISSA_MASK = (1u << 23)-1;
+    union {
+        float f;
+        uint32_t u32;
+    } u = {.f = value};
+    return (((int32_t)u.u32 >> 8) & ~MANTISSA_MASK) | (u.u32 & MANTISSA_MASK);   
+}
 
-    return result;
+static inline int getFloatSign(const float value) {
+    union {
+        float f;
+        uint32_t u32;
+    } u = {.f = value};
+    return (int32_t)u.u32 >> 31;
 }
 
 /**
@@ -244,35 +307,42 @@ static uint16_t int_2_slinear11(int value)
  */
 static uint16_t float_2_slinear11(float value)
 {
-    int mantissa;
-    int exponent = 0;
-    uint16_t result = 0;
-    int i;
+    int m = getFloatMantissa(value);
+    // Take sign + 9 MSBs from the (23-bit) mantissa (11th and 10th bit become the sign),
+    // then set the float's implicit '1' at the 10th bit.
+    // This gives us sign + '1' + 9 significant bits as the mantissa for the slinear.
+    m = ((m >> (23-9)) | (1u<<9));
+    const int e = getFloatExponent(value)-9;
+    return (uint16_t)((e << 11) | (m & ((1u<<11)-1)));
+    // int mantissa;
+    // int exponent = 0;
+    // uint16_t result = 0;
+    // int i;
 
-    // First see if the exponent is positive or negative
-    if (value > 0) {
-        // exponent is negative
-        for (i=0; i<=15; i++) {
-            mantissa = value * powf(2.0, i);
-            if (mantissa >= 1024) {
-                exponent = i-1;
-                mantissa = value * powf(2.0, exponent);
-                break;
-            }
-        }
-        if (i == 16) {
-            ESP_LOGI(TAG, "Could not find a solution");
-            return 0;
-        }
-    } else {
-        // value is negative
-        ESP_LOGI(TAG, "No negative numbers at this time");
-        return 0;
-    }
+    // // First see if the exponent is positive or negative
+    // if (value > 0) {
+    //     // exponent is negative
+    //     for (i=0; i<=15; i++) {
+    //         mantissa = value * powf(2.0, i);
+    //         if (mantissa >= 1024) {
+    //             exponent = i-1;
+    //             mantissa = value * powf(2.0, exponent);
+    //             break;
+    //         }
+    //     }
+    //     if (i == 16) {
+    //         ESP_LOGI(TAG, "Could not find a solution");
+    //         return 0;
+    //     }
+    // } else {
+    //     // value is negative
+    //     ESP_LOGI(TAG, "No negative numbers at this time");
+    //     return 0;
+    // }
 
-    result = (( (~exponent + 1) << 11) & 0xF800) + mantissa;
+    // result = (( (~exponent + 1) << 11) & 0xF800) + mantissa;
 
-    return result;
+    // return result;
 }
 
 /**
@@ -284,20 +354,27 @@ static uint16_t float_2_slinear11(float value)
  */
 static float ulinear16_2_float(uint16_t value, int i2c_addr)
 {
-    uint8_t voutmode;
-    int exponent;
-    float result;
-
-    smb_read_byte(PMBUS_VOUT_MODE, &voutmode, i2c_addr);
-
-    if (voutmode & 0x10) {
-        // exponent is negative
-        exponent = -1 * ((~voutmode & 0x1F) + 1);
+    if(value == 0) {
+        return 0.0f;
     } else {
-        exponent = (voutmode & 0x1F);
+        uint8_t voutmode;
+        // int exponent;
+        // float result;
+
+        smb_read_byte(PMBUS_VOUT_MODE, &voutmode, i2c_addr);
+        // exponent = signExtend(voutmode,5);
+
+        // if (voutmode & 0x10) {
+        //     // exponent is negative
+        //     exponent = -1 * ((~voutmode & 0x1F) + 1);
+        // } else {
+        //     exponent = (voutmode & 0x1F);
+        // }
+        // result = (value * powf(2.0, exponent));
+        // result = lshift(value,signExtend(voutmode,5));
+        // return result;
+        return lshift(value,signExtend(voutmode,5));
     }
-    result = (value * powf(2.0, exponent));
-    return result;
 }
 
 /**
@@ -309,21 +386,29 @@ static float ulinear16_2_float(uint16_t value, int i2c_addr)
 */
 static uint16_t float_2_ulinear16(float value, int i2c_addr)
 {
+    // int32_t e = getFloatExponent(value);
+    // int32_t m = getFloatMantissa(value);
     uint8_t voutmode;
-    float exponent;
-    uint16_t result;
+    // float exponent;
+    // uint16_t result;
 
     smb_read_byte(PMBUS_VOUT_MODE, &voutmode, i2c_addr);
-    if (voutmode & 0x10) {
-        // exponent is negative
-        exponent = -1 * ((~voutmode & 0x1F) + 1);
-    } else {
-        exponent = (voutmode & 0x1F);
-    }
+    // Sign-extend bits 0..4 of voutmode
+    // int exp = signExtend(voutmode,5);
+    // int exp_f = getFloatExponent(value);
+    // int man = getFloatMantissa(value);
+    // int sh = exp - exp_f;
+    
+    // if (voutmode & 0x10) {
+    //     // exponent is negative
+    //     exponent = -1 * ((~voutmode & 0x1F) + 1);
+    // } else {
+    //     exponent = (voutmode & 0x1F);
+    // }
 
-    result = (value / powf(2.0, exponent));
+    // result = (value / powf(2.0, exponent));
 
-    return result;
+    return lshift(value,-signExtend(voutmode,5));
 }
 
 /*--- Public TPS546 functions ---*/
@@ -333,12 +418,14 @@ static uint16_t float_2_ulinear16(float value, int i2c_addr)
 */
 esp_err_t TPS546_init(TPS546_CONFIG config, int i2c_addr)
 {
-	uint8_t data[7];
+    SMBBlock_t(7) d;
+    uint8_t* const data = d.block.data;
+	// uint8_t data[7];
     uint8_t u8_value = 0;
     uint16_t u16_value = 0;
     uint8_t read_mfr_revision[4];
     int temp;
-    uint8_t comp_config[5];
+    // uint8_t comp_config[5];
     uint8_t voutmode;
 
     tps546_config = config;
@@ -348,7 +435,7 @@ esp_err_t TPS546_init(TPS546_CONFIG config, int i2c_addr)
     ESP_RETURN_ON_ERROR(i2c_bitaxe_add_device(TPS546_I2C_ADDR[i2c_addr], &tps546_i2c_handle[i2c_addr], TAG), TAG, "Failed to add TPS546 I2C");
 
     /* Establish communication with regulator */
-    smb_read_block(PMBUS_IC_DEVICE_ID, data, 6, i2c_addr); //the DEVICE_ID block first byte is the length.
+    smb_read_block(PMBUS_IC_DEVICE_ID, &d.block, 6, i2c_addr); //the DEVICE_ID block first byte is the length.
     ESP_LOGI(TAG, "Device ID: %02x %02x %02x %02x %02x %02x", data[0], data[1], data[2], data[3], data[4], data[5]);
     /* There's 3 different known device IDs observed so far */
     if ( (memcmp(data, DEVICE_ID1, 6) != 0) && (memcmp(data, DEVICE_ID2, 6) != 0) && (memcmp(data, DEVICE_ID3, 6) != 0))
@@ -440,13 +527,13 @@ esp_err_t TPS546_init(TPS546_CONFIG config, int i2c_addr)
 
 
     // Read the compensation config registers
-    if (smb_read_block(PMBUS_COMPENSATION_CONFIG, comp_config, 5, i2c_addr) != ESP_OK) {
+    if (smb_read_block(PMBUS_COMPENSATION_CONFIG, &d.block, 5, i2c_addr) != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read COMPENSATION CONFIG");
         return ESP_FAIL;
     }
     ESP_LOGI(TAG, "read COMPENSATION CONFIG");
-    ESP_LOGI(TAG, "%02x %02x %02x %02x %02x", comp_config[0], comp_config[1],
-        comp_config[2], comp_config[3], comp_config[4]);
+    ESP_LOGI(TAG, "%02x %02x %02x %02x %02x", data[0], data[1],
+        data[2], data[3], data[4]);
 
 
     ESP_LOGI(TAG, "Clearing faults");
@@ -472,30 +559,42 @@ esp_err_t TPS546_clear_faults(int i2c_addr) {
  * @brief Read the manufacturer model and revision 
  * @param read_mfr_revision Pointer to store the read revision
 */
-void TPS546_read_mfr_info(uint8_t *read_mfr_revision, int i2c_addr)
+void TPS546_read_mfr_info(uint8_t* const read_mfr_revision, int i2c_addr)
 {
-    uint8_t read_mfr_id[4];
-    uint8_t read_mfr_model[4];
+    // uint8_t read_mfr_id[4];
+    // uint8_t read_mfr_model[4];
+
+    SMBBlock_t(3) d;
+    const uint8_t* const data = d.block.data;
 
     ESP_LOGI(TAG, "Reading MFR info");
-    if (smb_read_block(PMBUS_MFR_ID, read_mfr_id, 3, i2c_addr) != ESP_OK) {
+    if (smb_read_block(PMBUS_MFR_ID, &d.block, 3, i2c_addr) == ESP_OK) {
+        ESP_LOGI(TAG, "MFR_ID: %02X %02X %02X", data[0], data[1], data[2]); 
+    } else {
         ESP_LOGE(TAG, "Failed to read MFR ID");
         return;
     }
-    read_mfr_id[3] = 0x00;
-    if (smb_read_block(PMBUS_MFR_MODEL, read_mfr_model, 3, i2c_addr) != ESP_OK) {
+    // read_mfr_id[3] = 0x00;
+    if (smb_read_block(PMBUS_MFR_MODEL, &d.block, 3, i2c_addr) == ESP_OK) {
+        ESP_LOGI(TAG, "MFR_MODEL: %02X %02X %02X", data[0], data[1], data[2]);
+    } else {
         ESP_LOGE(TAG, "Failed to read MFR MODEL");
         return;
     }
-    read_mfr_model[3] = 0x00;
-    if (smb_read_block(PMBUS_MFR_REVISION, read_mfr_revision, 3, i2c_addr) != ESP_OK) {
+    // read_mfr_model[3] = 0x00;
+    if (smb_read_block(PMBUS_MFR_REVISION, &d.block, 3, i2c_addr) == ESP_OK) {
+        ESP_LOGI(TAG, "MFR_REVISION: %02X %02X %02X", data[0], data[1], data[2]);
+        read_mfr_revision[0] = data[0];
+        read_mfr_revision[1] = data[1];
+        read_mfr_revision[2] = data[2];
+    } else {
         ESP_LOGE(TAG, "Failed to read MFR REVISION");
         return;
     }
 
-    ESP_LOGI(TAG, "MFR_ID: %02X %02X %02X", read_mfr_id[0], read_mfr_id[1], read_mfr_id[2]);
-    ESP_LOGI(TAG, "MFR_MODEL: %02X %02X %02X", read_mfr_model[0], read_mfr_model[1], read_mfr_model[2]);
-    ESP_LOGI(TAG, "MFR_REVISION: %02X %02X %02X", read_mfr_revision[0], read_mfr_revision[1], read_mfr_revision[2]);
+    // ESP_LOGI(TAG, "MFR_ID: %02X %02X %02X", read_mfr_id[0], read_mfr_id[1], read_mfr_id[2]);
+    // ESP_LOGI(TAG, "MFR_MODEL: %02X %02X %02X", read_mfr_model[0], read_mfr_model[1], read_mfr_model[2]);
+    // ESP_LOGI(TAG, "MFR_REVISION: %02X %02X %02X", read_mfr_revision[0], read_mfr_revision[1], read_mfr_revision[2]);
 }
 
 /**

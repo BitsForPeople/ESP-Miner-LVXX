@@ -364,6 +364,7 @@ void BAP_handle_settings(const char *parameter, const char *value) {
                     BAP_send_message(BAP_CMD_STA, "status", "restarting");
                     vTaskDelay(pdMS_TO_TICKS(1000));
                     esp_restart();
+                    __builtin_unreachable();
                 } else {
                     ESP_LOGE(TAG, "Failed to set WiFi password");
                     BAP_send_message(BAP_CMD_ERR, parameter, "set_failed");

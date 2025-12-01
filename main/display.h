@@ -17,7 +17,7 @@ typedef struct {
 } DisplayConfig;
 
 static const DisplayConfig display_configs[] = {
-    { .name = "NONE",             .display = NONE,                                },
+    { .name = "NONE",             .display = NONE,    .h_res = 0,   .v_res = 0,   },
     { .name = "SSD1306 (128x32)", .display = SSD1306, .h_res = 128, .v_res = 32,  },
     { .name = "SSD1309 (128x64)", .display = SSD1309, .h_res = 128, .v_res = 64,  },
     { .name = "SH1107 (64x128)",  .display = SH1107,  .h_res = 64,  .v_res = 128, },

@@ -12,6 +12,8 @@
 #include "work_queue.h"
 #include "device_config.h"
 #include "display.h"
+// #include "asic_drvr.h"
+#include "ptrqueue.h"
 
 #define STRATUM_USER CONFIG_STRATUM_USER
 #define FALLBACK_STRATUM_USER CONFIG_FALLBACK_STRATUM_USER
@@ -83,10 +85,15 @@ typedef struct
     char *finished;
 } SelfTestModule;
 
+struct AsicDrvr;
+
 typedef struct
 {
     work_queue stratum_queue;
     work_queue ASIC_jobs_queue;
+
+    // QueueHandle_t stratum_queue_hdl;
+    // QueueHandle_t asic_jobs_queue_hdl;
 
     SystemModule SYSTEM_MODULE;
     DeviceConfig DEVICE_CONFIG;
@@ -94,7 +101,9 @@ typedef struct
     AsicTaskModule ASIC_TASK_MODULE;
     PowerManagementModule POWER_MANAGEMENT_MODULE;
     SelfTestModule SELF_TEST_MODULE;
-    StatisticsModule STATISTICS_MODULE;
+    // StatisticsModule STATISTICS_MODULE;
+
+    const struct AsicDrvr* asic_drvr;
 
     char * extranonce_str;
     int extranonce_2_len;

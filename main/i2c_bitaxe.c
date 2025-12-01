@@ -19,7 +19,7 @@
 
 static i2c_master_bus_handle_t i2c_bus_handle;
 
-static const char * TAG = "i2c_bitaxe";
+static const char * const TAG = "i2c_bitaxe";
 
 typedef struct {
     i2c_master_dev_handle_t handle;

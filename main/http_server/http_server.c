@@ -15,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_vfs.h"
+#include "esp_heap_caps.h"
 
 #include "dns_server.h"
 #include "esp_mac.h"
@@ -46,13 +47,29 @@
 #define JSON_ALL_STATS_ELEMENT_SIZE 120
 #define JSON_DASHBOARD_STATS_ELEMENT_SIZE 60
 
-static const char * TAG = "http_server";
-static const char * CORS_TAG = "CORS";
+static const char * const TAG = "http_server";
+static const char * const CORS_TAG = "CORS";
 
 static char axeOSVersion[32];
 
 static GlobalState * GLOBAL_STATE;
 static httpd_handle_t server = NULL;
+
+static inline void* allocPrefPSRAM(size_t sz) {
+    void* m = heap_caps_malloc(sz,MALLOC_CAP_SPIRAM);
+    if(m == NULL) {
+        m = heap_caps_malloc(sz,MALLOC_CAP_INTERNAL);
+    }
+    return m;
+}
+
+// static inline void* callocPrefPSRAM(size_t sz) {
+//     void* m = heap_caps_calloc(sz,MALLOC_CAP_SPIRAM);
+//     if(m == NULL) {
+//         m = heap_caps_calloc(sz,MALLOC_CAP_INTERNAL);
+//     }
+//     return m;
+// }
 
 /* Handler for WiFi scan endpoint */
 static esp_err_t GET_wifi_scan(httpd_req_t *req)
@@ -423,7 +440,7 @@ static esp_err_t rest_common_get_handler(httpd_req_t * req)
     } while (read_bytes > 0);
     /* Close file after sending complete */
     close(fd);
-    ESP_LOGI(TAG, "File sending complete");
+    // ESP_LOGI(TAG, "File sending complete");
     /* Respond with an empty chunk to signal HTTP response completion */
     httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
@@ -569,6 +586,7 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
     }
     if ((item = cJSON_GetObjectItem(root, "statsFrequency")) != NULL) {
         nvs_config_set_u16(NVS_CONFIG_STATISTICS_FREQUENCY, item->valueint);
+        statistics_set_collection_interval(item->valueint);
     }
     if ((item = cJSON_GetObjectItem(root, "overclockEnabled")) != NULL) {
         nvs_config_set_u16(NVS_CONFIG_OVERCLOCK_ENABLED, item->valueint);
@@ -602,6 +620,8 @@ static esp_err_t POST_restart(httpd_req_t * req)
 
     // Restart the system
     esp_restart();
+
+    __builtin_unreachable();
 
     // This return statement will never be reached, but it's good practice to include it
     return ESP_OK;
@@ -742,15 +762,17 @@ static esp_err_t GET_system_info(httpd_req_t * req)
 
 int create_json_statistics_all(cJSON * root)
 {
-    int prebuffer = 0;
-
-    if (root) {
-        // create array for all statistics
-        const char *label[12] = {
+    static const char* const label[12] = {
             "hashRate", "temp", "vrTemp", "power", "voltage",
             "current", "coreVoltageActual", "fanspeed", "fanrpm",
             "wifiRSSI", "freeHeap", "timestamp"
         };
+
+    int prebuffer = 0;
+
+    if (root) {
+        // create array for all statistics
+
 
         cJSON * statsLabelArray = cJSON_CreateStringArray(label, 12);
         cJSON_AddItemToObject(root, "labels", statsLabelArray);
@@ -758,15 +780,15 @@ int create_json_statistics_all(cJSON * root)
 
         cJSON * statsArray = cJSON_AddArrayToObject(root, "statistics");
 
-        if (NULL != GLOBAL_STATE->STATISTICS_MODULE.statisticsList) {
-            StatisticsNodePtr node = *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
-            struct StatisticsData statsData;
+            
+        struct StatisticsData statsData;
+        // StatisticsNodePtr node = NULL;// *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
 
-            while (NULL != node) {
-                node = statisticData(node, &statsData);
+        if(statisticDataNext(NULL,&statsData)) {
+            do {
 
                 cJSON *valueArray = cJSON_CreateArray();
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate));
+                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate_MHz / 1000.f));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.chipTemperature));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.vrTemperature));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.power));
@@ -781,8 +803,33 @@ int create_json_statistics_all(cJSON * root)
 
                 cJSON_AddItemToArray(statsArray, valueArray);
                 prebuffer++;
-            }
+
+            } while(statisticDataNext(&statsData,&statsData));
         }
+
+        // if (NULL != GLOBAL_STATE->STATISTICS_MODULE.statisticsList) {
+
+        //     while (NULL != node) {
+        //         node = statisticData(node, &statsData);
+
+        //         cJSON *valueArray = cJSON_CreateArray();
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.chipTemperature));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.vrTemperature));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.power));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.voltage));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.current));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.coreVoltageActual));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.fanSpeed));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.fanRPM));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.wifiRSSI));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.freeHeap));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.timestamp));
+
+        //         cJSON_AddItemToArray(statsArray, valueArray);
+        //         prebuffer++;
+        //     }
+        // }
     }
 
     return prebuffer;
@@ -796,23 +843,42 @@ int create_json_statistics_dashboard(cJSON * root)
         // create array for dashboard statistics
         cJSON * statsArray = cJSON_AddArrayToObject(root, "statistics");
 
-        if (NULL != GLOBAL_STATE->STATISTICS_MODULE.statisticsList) {
-            StatisticsNodePtr node = *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
-            struct StatisticsData statsData;
+        struct StatisticsData statsData;
+        // StatisticsNodePtr node = NULL;// *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
 
-            while (NULL != node) {
-                node = statisticData(node, &statsData);
-
+        if(statisticDataNext(NULL,&statsData)) {
+            do {
                 cJSON *valueArray = cJSON_CreateArray();
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate));
+                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate_MHz / 1000.f));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.chipTemperature));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.power));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.timestamp));
 
                 cJSON_AddItemToArray(statsArray, valueArray);
                 prebuffer++;
-            }
+            } while(statisticDataNext(&statsData,&statsData));
+
         }
+        // struct StatisticsData statsData;
+        // StatisticsNodePtr node = statisticData(NULL,&statsData)
+        // if (NULL != GLOBAL_STATE->STATISTICS_MODULE.statisticsList) {
+        //     StatisticsNodePtr node = *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
+
+
+        //     while (NULL != node) {
+        //         node = statisticData(node, &statsData);
+
+        //         cJSON *valueArray = cJSON_CreateArray();
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.chipTemperature));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.power));
+        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.timestamp));
+
+        //         cJSON_AddItemToArray(statsArray, valueArray);
+        //         prebuffer++;
+        //     }
+        // }
+
     }
 
     return prebuffer;
@@ -1018,6 +1084,7 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
     ESP_LOGI(TAG, "Restarting System because of Firmware update complete");
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     esp_restart();
+    __builtin_unreachable();
 
     return ESP_OK;
 }
@@ -1052,7 +1119,12 @@ esp_err_t start_rest_server(void * pvParameters)
     }
 
     REST_CHECK(base_path, "wrong base path", err);
-    rest_server_context_t * rest_context = calloc(1, sizeof(rest_server_context_t));
+    rest_server_context_t * rest_context = heap_caps_calloc(1,sizeof(rest_server_context_t),MALLOC_CAP_SPIRAM);
+    if(rest_context == NULL) {
+        ESP_LOGI(TAG, "Could not allocate from PSRAM; trying default allocation.");
+        rest_context = calloc(1,sizeof(rest_server_context_t));
+    }
+    // calloc(1, sizeof(rest_server_context_t));
     REST_CHECK(rest_context, "No memory for rest context", err);
     strlcpy(rest_context->base_path, base_path, sizeof(rest_context->base_path));
 

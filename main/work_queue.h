@@ -19,8 +19,7 @@ typedef struct
 
 void queue_init(work_queue *queue);
 void queue_enqueue(work_queue *queue, void *new_work);
-void ASIC_jobs_queue_clear(work_queue *queue);
 void *queue_dequeue(work_queue *queue);
-void queue_clear(work_queue *queue);
+void queue_consume_all(work_queue* const queue, void(*consumer_fn)(void*));
 
 #endif // WORK_QUEUE_H

@@ -30,7 +30,7 @@
 #include "vcore.h"
 #include "thermal.h"
 
-static const char * TAG = "system";
+static const char * const TAG = "system";
 
 static void _suffix_string(uint64_t, char *, size_t, int);
 
