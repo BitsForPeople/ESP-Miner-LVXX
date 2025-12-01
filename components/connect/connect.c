@@ -183,6 +183,7 @@ static void event_handler(void * arg, esp_event_base_t event_base, int32_t event
             sprintf(GLOBAL_STATE->SYSTEM_MODULE.wifi_status, "%s (Error %d, retry #%d)", get_wifi_reason_string(event->reason), event->reason, s_retry_num);
             ESP_LOGI(TAG, "Wi-Fi status: %s", GLOBAL_STATE->SYSTEM_MODULE.wifi_status);
 
+            // FIXME Do not block inside the event handler!
             // Wait a little
             vTaskDelay(5000 / portTICK_PERIOD_MS);
 

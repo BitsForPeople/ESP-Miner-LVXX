@@ -287,7 +287,7 @@ class NvsCtx {
 
     template<typename T>
     T get(const char* const key, const T default_value) {
-        return doRead<NVS_op<T>::read>(key,default_value);
+        return readNvs<NVS_op<T>::read>(key,default_value);
     }
 
     template<typename T>
@@ -347,7 +347,7 @@ class NvsCtx {
     template<auto F, typename T>
     esp_err_t writeNvs(const char* const key, T value) {
         freertos::Lck lck {acquire()};
-        const esp_err_t r = std::invoke(F, getHandle(), key, value);
+        const esp_err_t r = std::invoke(F, doGetHandle(), key, value);
         if(r == ESP_OK) {
             doCommit();
             // Take note of the potential change in config data:
@@ -363,7 +363,7 @@ class NvsCtx {
     }
 
     template<auto F, typename T>
-    T doRead(const char* const key, const T default_value) {
+    T readNvs(const char* const key, const T default_value) {
         T val;
         esp_err_t r = execRead<F>(key,val);
         if(r == ESP_OK) {
