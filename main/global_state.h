@@ -4,12 +4,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "asic_task.h"
-// #include "common.h"
+
 #include "power_management_task.h"
 #include "statistics_task.h"
 #include "serial.h"
 #include "stratum_api.h"
-#include "work_queue.h"
+
 #include "device_config.h"
 #include "display.h"
 // #include "asic_drvr.h"
@@ -89,12 +89,6 @@ struct AsicDrvr;
 
 typedef struct
 {
-    work_queue stratum_queue;
-    work_queue ASIC_jobs_queue;
-
-    // QueueHandle_t stratum_queue_hdl;
-    // QueueHandle_t asic_jobs_queue_hdl;
-
     SystemModule SYSTEM_MODULE;
     DeviceConfig DEVICE_CONFIG;
     DisplayConfig DISPLAY_CONFIG;
@@ -107,7 +101,6 @@ typedef struct
 
     char * extranonce_str;
     int extranonce_2_len;
-    int abandon_work;
 
     uint8_t * valid_jobs;
     pthread_mutex_t valid_jobs_lock;

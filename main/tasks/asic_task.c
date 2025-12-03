@@ -1,12 +1,17 @@
 #include "system.h"
 #include <math.h>
-#include "work_queue.h"
+#include <pthread.h>
 #include "serial.h"
 #include <string.h>
 #include "esp_log.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+#include "tasks_events.h"
+#include "mn_exchange.h"
+#include "bm_job_builder.h"
+#include "bm_job_pool.h"
 
 #include "asic.h"
 
@@ -62,26 +67,67 @@ static inline uint32_t getCurrentJobTimeTicks(const GlobalState* const GLOBAL_ST
     return jobTime.ticks_per_job;
 }
 
+static TickType_t get_ticks_left(const TickType_t tStart, const TickType_t max_wait) {
+    if(max_wait == portMAX_DELAY) {
+        return max_wait;
+    } else {
+        const TickType_t elapsed = xTaskGetTickCount() - tStart;
+        if(max_wait > elapsed) {
+            return max_wait - elapsed;
+        } else {
+            return 0;
+        }
+    }
+}
+
+
+
+static const EventBits_t EVENTS = TASKS_EVENTS_STRATUM_EVENTS;
+
+static inline EventBits_t event_wait(TickType_t maxWait) {
+    return tasks_events_wait(EVENTS, true, maxWait);
+}
+
+static inline EventBits_t event_get_bits(void) {
+    return tasks_events_get_bits();
+}
+
+
+
+static inline void release_mining_notify(mining_notify* const mining_notification) {
+    if(mining_notification != NULL) {
+        STRATUM_V1_free_mining_notify(mining_notification);
+    }
+}
+
+static inline void invalidate_all_jobs(GlobalState* const GLOBAL_STATE) {
+    pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock);
+    {
+        for (int i = 0; i < 128; i = i + 4) {
+            GLOBAL_STATE->valid_jobs[i] = 0;
+        }
+    }
+    pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock);
+}
+
+
 
 void ASIC_task(void *pvParameters)
 {
-    GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
-
-    //initialize the semaphore
-    SemaphoreHandle_t sem = xSemaphoreCreateBinary();
-    GLOBAL_STATE->ASIC_TASK_MODULE.semaphore = sem;
+    GlobalState* const GLOBAL_STATE = (GlobalState *)pvParameters;
 
     GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs = malloc(sizeof(bm_job *) * 128);
     GLOBAL_STATE->valid_jobs = malloc(sizeof(uint8_t) * 128);
+
+    pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock);
     for (int i = 0; i < 128; i++)
     {
         GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[i] = NULL;
         GLOBAL_STATE->valid_jobs[i] = 0;
     }
+    pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock);
 
     double asic_job_frequency_ms = ASIC_get_asic_job_frequency_ms(GLOBAL_STATE);
-
-
 
     ESP_LOGI(TAG, "ASIC Job Interval: %.2f ms", asic_job_frequency_ms);
     SYSTEM_notify_mining_started(GLOBAL_STATE);
@@ -89,20 +135,74 @@ void ASIC_task(void *pvParameters)
 
     const TickType_t job_freq_ticks = (uint32_t)asic_job_frequency_ms / portTICK_PERIOD_MS;
 
+    TickType_t last_job_time = 0;
+
+    mining_notify* mining_notification = NULL;
+    uint64_t extranonce_2 = 0;
+
     while (1)
     {
-        bm_job *next_bm_job = (bm_job *)queue_dequeue(&GLOBAL_STATE->ASIC_jobs_queue);
+        /*
+         * As long as we have valid mining_notify data, wake up (at least) at job_freq_ticks
+         * intervals to build and send a new job to the ASIC.
+         * If&while we have no (more) valid mining_notify data, we stop generating jobs and
+         * only process events until we have mining_notify again.
+         */
+        const EventBits_t evt = event_wait(
+            (mining_notification == NULL) ? 
+                portMAX_DELAY
+                :
+                get_ticks_left(last_job_time,job_freq_ticks)
+        );
 
+        if(event_is_stratum_abandon_work(evt)) {
+            ESP_LOGI(TAG, "Abandoning work.");
 
+            // Discontinue working with this notification.
+            release_mining_notify(mining_notification);
+            mining_notification = NULL;
 
-        //(*GLOBAL_STATE->ASIC_functions.send_work_fn)(GLOBAL_STATE, next_bm_job); // send the job to the ASIC
-        ASIC_send_work(GLOBAL_STATE, next_bm_job);
+            invalidate_all_jobs(GLOBAL_STATE);
 
-        // Time to execute the above code is ~0.3ms
-        // Delay for ASIC(s) to finish the job
-        //vTaskDelay((asic_job_frequency_ms - 0.3) / portTICK_PERIOD_MS);
-        // xSemaphoreTake(GLOBAL_STATE->ASIC_TASK_MODULE.semaphore, asic_job_frequency_ms / portTICK_PERIOD_MS);
-        xSemaphoreTake(sem, job_freq_ticks );
-        // xSemaphoreTake(sem, getCurrentJobTimeTicks(GLOBAL_STATE));
+            // Acknowledge that we're done and waiting for new work.
+            tasks_events_set_bits(TASKS_EVENTS_STRATUM_WORK_ABANDONED);
+        }
+        if(event_is_version_change(evt)) {
+            ESP_LOGI(TAG, "New version mask %" PRIx32, (uint32_t)(GLOBAL_STATE->version_mask >> 13));
+            ASIC_set_version_mask(GLOBAL_STATE, GLOBAL_STATE->version_mask);
+        }
+        if(event_is_diff_change(evt)) {
+            // Ok...
+        }
+        if(event_is_stratum_new_work(evt)) {
+            ESP_LOGI(TAG, "Getting new work.");
+
+            // Discontinue working with this notification.
+            release_mining_notify(mining_notification);
+            mining_notification = NULL;
+            
+            extranonce_2 = 0;
+            mining_notification = shared_mn_xch(NULL);
+        }
+
+        if(mining_notification != NULL) {
+            if(get_ticks_left(last_job_time,job_freq_ticks) == 0) {
+                // It's time to send a new job.
+                last_job_time = xTaskGetTickCount();
+
+                bm_job* const next_bm_job = bmjobpool_take();
+
+                if(next_bm_job != NULL) {
+                    if(bm_job_build(GLOBAL_STATE,mining_notification,extranonce_2, GLOBAL_STATE->pool_difficulty,next_bm_job)) {
+                        extranonce_2 += 1;
+                        ASIC_send_work(GLOBAL_STATE, next_bm_job);
+                    } else {
+                        ESP_LOGW(TAG, "bm_job_build failed.");
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Couldn't get a bm_job from the pool.");
+                }
+            }
+        }
     }
 }

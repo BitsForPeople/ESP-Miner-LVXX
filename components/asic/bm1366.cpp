@@ -1,7 +1,8 @@
 #include "bm1366.h"
 
 extern "C" {
-
+    
+#include <pthread.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
@@ -601,25 +602,17 @@ static inline T& al(T* x) {
 }
 
 static void makeJob(const uint8_t id, const bm_job& next_bm_job, BM1366_job& job) {
-    // id = (id + 8) % 128;
+
     job.job_id = id;
     job.num_midstates = 0x01;
     job.starting_nonce_u32 = next_bm_job.starting_nonce;
 
     job.nbits_u32 = next_bm_job.target;
     job.ntime_u32 = next_bm_job.ntime;
-    // memcpy(&job.starting_nonce, &next_bm_job.starting_nonce, 4);
-    // memcpy(&job.nbits, &next_bm_job.target, 4);
-    // memcpy(&job.ntime, &next_bm_job.ntime, 4);
-    // memcpy(job.merkle_root, next_bm_job.merkle_root_be, 32);
-    // memcpy(job.prev_block_hash, next_bm_job.prev_block_hash_be, 32);
 
-    // cpy<32>( next_bm_job.merkle_root_be, job.merkle_root);
-    // cpy<32>( next_bm_job.prev_block_hash_be, job.prev_block_hash);
     cpyWordsReverse<8>(next_bm_job.merkle_root, job.merkle_root);
     cpyWordsReverse<8>(next_bm_job.prev_block_hash, job.prev_block_hash);
 
-    // memcpy(&job.version, &next_bm_job.version, 4);
     job.version_u32 = next_bm_job.version;
 }
 
@@ -678,31 +671,13 @@ struct JobMsg {
         return this->arr;
     }
 
-    // private:
-    //     constexpr void initPrefix() {
-    //         std::copy(PREFIX.data(),PREFIX.data()+PREFIX.size(),this->arr);
-    //     }
-
 };
 
 void BM1366_send_work(GlobalState* const GLOBAL_STATE, bm_job* const next_bm_job)
 {
-
-    // GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
-
     const uint8_t newJobId = (id = (id + 8) % 128);
 
-    // BM1366_job job;
     JobMsg jm {newJobId, *next_bm_job};
-    
-    // job.job_id = newJobId;
-    // job.num_midstates = 0x01;
-    // memcpy(&job.starting_nonce, &next_bm_job->starting_nonce, 4);
-    // memcpy(&job.nbits, &next_bm_job->target, 4);
-    // memcpy(&job.ntime, &next_bm_job->ntime, 4);
-    // memcpy(job.merkle_root, next_bm_job->merkle_root_be, 32);
-    // memcpy(job.prev_block_hash, next_bm_job->prev_block_hash_be, 32);
-    // memcpy(&job.version, &next_bm_job->version, 4);
 
     if (GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[newJobId] != NULL) {
         free_bm_job(GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[newJobId]);

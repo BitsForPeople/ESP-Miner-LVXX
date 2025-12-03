@@ -4,6 +4,7 @@
 #include <string.h>
 #include <math.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

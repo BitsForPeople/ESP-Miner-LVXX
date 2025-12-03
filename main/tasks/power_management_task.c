@@ -93,15 +93,13 @@ void POWER_MANAGEMENT_task(void * pvParameters)
 
     uint16_t last_core_voltage = 0;
 
-    // bool configChanged = true;
-
     bool autoFanSpeed;
     uint16_t manualFanSpeed;
     uint16_t core_voltage;
-    float asic_frequency; // = nvs_config_get_float(NVS_CONFIG_ASIC_FREQUENCY_FLOAT, CONFIG_ASIC_FREQUENCY);
-    uint16_t new_overheat_mode; // = nvs_config_get_u16(NVS_CONFIG_OVERHEAT_MODE, 0);
+    float asic_frequency; 
+    uint16_t new_overheat_mode; 
 
-    uint32_t configModCnt = -1;
+    uint32_t configModCnt = nvs_config_get_modcount() - 1; // Make sure we initially read all config values once.
     while (1) {
 
         // Check for any config modifications and reload values if needed.
@@ -173,7 +171,6 @@ void POWER_MANAGEMENT_task(void * pvParameters)
             exit(EXIT_FAILURE);
         }
         //enable the PID auto control for the FAN if set
-        // if (nvs_config_get_u16(NVS_CONFIG_AUTO_FAN_SPEED, 1) == 1) {
         if(autoFanSpeed) {
             if (power_management->chip_temp_avg >= 0) { // Ignore invalid temperature readings (-1)
                 pid_input = power_management->chip_temp_avg;
@@ -223,15 +220,9 @@ void POWER_MANAGEMENT_task(void * pvParameters)
                 }
             }
         } else { // Manual fan speed
-            // float fs = (float) nvs_config_get_u16(NVS_CONFIG_FAN_SPEED, 40);
-            // power_management->fan_perc = fs;
-            // Thermal_set_fan_percent(&GLOBAL_STATE->DEVICE_CONFIG, (float) fs / 100.0);
             power_management->fan_perc = manualFanSpeed;
             Thermal_set_fan_percent(&GLOBAL_STATE->DEVICE_CONFIG, manualFanSpeed / 100.f);
         }
-
-        // uint16_t core_voltage = nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE);
-        // float asic_frequency = nvs_config_get_float(NVS_CONFIG_ASIC_FREQUENCY_FLOAT, CONFIG_ASIC_FREQUENCY);
 
         if (core_voltage != last_core_voltage) {
             ESP_LOGI(TAG, "Setting new vcore voltage to %" PRIu16 "mV", core_voltage);
@@ -252,8 +243,6 @@ void POWER_MANAGEMENT_task(void * pvParameters)
         }
 
         // Check for changing of overheat mode
-        // uint16_t new_overheat_mode = nvs_config_get_u16(NVS_CONFIG_OVERHEAT_MODE, 0);
-        
         if (new_overheat_mode != sys_module->overheat_mode) {
             sys_module->overheat_mode = new_overheat_mode;
             ESP_LOGI(TAG, "Overheat mode updated to: %" PRIu16, sys_module->overheat_mode);

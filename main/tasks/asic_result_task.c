@@ -1,7 +1,7 @@
 #include <lwip/tcpip.h>
 
 #include "system.h"
-#include "work_queue.h"
+
 #include "serial.h"
 #include <string.h>
 #include "esp_log.h"

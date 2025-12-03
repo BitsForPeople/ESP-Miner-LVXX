@@ -5,7 +5,6 @@
 
 #include "asic_result_task.h"
 #include "asic_task.h"
-#include "create_jobs_task.h"
 #include "statistics_task.h"
 #include "system.h"
 #include "http_server.h"
@@ -22,10 +21,8 @@
 #include "asic_reset.h"
 
 #include "cjson_helper.h"
-// #include "ptrqueue.h"
 
-// static PtrqueueMem_t stratumQueueMem;
-// static PtrqueueMem_t asicJobsQueueMem;
+#include "tasks/tasks_events.h"
 
 static GlobalState GLOBAL_STATE;
 
@@ -65,6 +62,9 @@ void app_main(void)
         return;
     }
 
+    // Make sure the tasks we'll launch can communicate:
+    tasks_events_init();
+
     if (self_test(&GLOBAL_STATE)) return;
 
     SYSTEM_init_system(&GLOBAL_STATE);
@@ -76,7 +76,7 @@ void app_main(void)
     SYSTEM_init_peripherals(&GLOBAL_STATE);
 
     //start the API for AxeOS
-    start_rest_server((void *) &GLOBAL_STATE);
+    start_rest_server(&GLOBAL_STATE);
 
     // Initialize BAP interface
     // esp_err_t bap_ret = BAP_init(&GLOBAL_STATE);
@@ -91,11 +91,6 @@ void app_main(void)
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 
-    queue_init(&GLOBAL_STATE.stratum_queue);
-    queue_init(&GLOBAL_STATE.ASIC_jobs_queue);
-
-    // GLOBAL_STATE.stratum_queue_hdl = ptrqueue_init(&stratumQueueMem);
-    // GLOBAL_STATE.asic_jobs_queue_hdl = ptrqueue_init(&asicJobsQueueMem);
 
     if (asic_reset() != ESP_OK) {
         GLOBAL_STATE.SYSTEM_MODULE.asic_status = "ASIC reset failed";
@@ -117,9 +112,8 @@ void app_main(void)
     GLOBAL_STATE.ASIC_initalized = true;
 
     xTaskCreatePinnedToCore(POWER_MANAGEMENT_task, "power management", 8192, (void *) &GLOBAL_STATE, 10, NULL, 0);
-    xTaskCreatePinnedToCore(stratum_task, "stratum admin", 8192, (void *) &GLOBAL_STATE, 5, NULL, 0);
+    xTaskCreatePinnedToCore(stratum_task, "stratum", 8192, (void *) &GLOBAL_STATE, 5, NULL, 0);
 
-    xTaskCreatePinnedToCore(create_jobs_task, "stratum miner", 8192, (void *) &GLOBAL_STATE, 10, NULL, 1);
     xTaskCreatePinnedToCore(ASIC_task, "asic", 8192, (void *) &GLOBAL_STATE, 10, NULL, 1);
     xTaskCreatePinnedToCore(ASIC_result_task, "asic result", 8192, (void *) &GLOBAL_STATE, 15, NULL, 1);
     

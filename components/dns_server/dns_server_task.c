@@ -254,7 +254,7 @@ void dns_server_task(void * pvParameters)
 
             // Error occurred during receiving
             if (len < 0) {
-                if(!!dns_server_is_stop_requested(inst)) {
+                if(!dns_server_is_stop_requested(inst)) {
                     ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
                 }
                 close(sock);

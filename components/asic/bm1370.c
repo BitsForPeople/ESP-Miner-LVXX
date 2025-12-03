@@ -1,5 +1,7 @@
+
 #include "bm1370.h"
 
+#include <pthread.h>
 #include "crc.h"
 #include "global_state.h"
 #include "serial.h"

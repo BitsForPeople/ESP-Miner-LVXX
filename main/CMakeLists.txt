@@ -8,7 +8,7 @@ SRCS
     "screen.c"
     "input.c"
     "system.c"
-    "work_queue.c"
+    # "work_queue.c"
     "nvs_device.c"
     "lv_font_portfolio-6x8.c"
     "logo.c"
@@ -24,7 +24,7 @@ SRCS
     "./http_server/axe-os/api/system/asic_settings.c"
     "./self_test/self_test.c"
     "./tasks/stratum_task.c"
-    "./tasks/create_jobs_task.c"
+    # "./tasks/create_jobs_task.c"
     "./tasks/asic_task.c"
     "./tasks/asic_result_task.c"
     "./tasks/power_management_task.c"
@@ -43,6 +43,9 @@ SRCS
     "./power/asic_reset.c"
 
     "cjson_helper.c"
+    "./tasks/tasks_events.cpp"
+    "./tasks/mn_exchange.c"
+    "./tasks/bm_job_builder.c"
 
 INCLUDE_DIRS
     "."
