@@ -88,12 +88,6 @@ static inline EventBits_t event_wait(TickType_t maxWait) {
     return tasks_events_wait(EVENTS, true, maxWait);
 }
 
-static inline EventBits_t event_get_bits(void) {
-    return tasks_events_get_bits();
-}
-
-
-
 static inline void release_mining_notify(mining_notify* const mining_notification) {
     if(mining_notification != NULL) {
         STRATUM_V1_free_mining_notify(mining_notification);
@@ -156,6 +150,9 @@ void ASIC_task(void *pvParameters)
         );
 
         if(event_is_stratum_abandon_work(evt)) {
+            // Acknowledge that we got the memo and are in the appropriate branch of execution now.
+            tasks_events_set_bits(TASKS_EVENTS_STRATUM_WORK_ABANDONED);
+
             ESP_LOGI(TAG, "Abandoning work.");
 
             // Discontinue working with this notification.
@@ -164,8 +161,8 @@ void ASIC_task(void *pvParameters)
 
             invalidate_all_jobs(GLOBAL_STATE);
 
-            // Acknowledge that we're done and waiting for new work.
-            tasks_events_set_bits(TASKS_EVENTS_STRATUM_WORK_ABANDONED);
+            // The next job should start immediately when we get new work. So pretend the last job was sent a full interval.
+            last_job_time = xTaskGetTickCount() - job_freq_ticks;
         }
         if(event_is_version_change(evt)) {
             ESP_LOGI(TAG, "New version mask %" PRIx32, (uint32_t)(GLOBAL_STATE->version_mask >> 13));

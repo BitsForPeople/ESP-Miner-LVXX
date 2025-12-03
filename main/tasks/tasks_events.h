@@ -6,30 +6,17 @@
 extern "C" {
 #endif
 
-// Using just one event group for all three tasks involved here.
+// These events are used for coordination between stratum_task and asic_task.
 
-// stratum -> create job
+// stratum -> asic
 #define TASKS_EVENTS_POOL_DIFF_CHANGED      (1<<0)
 #define TASKS_EVENTS_VERSION_MASK_CHANGED   (1<<1)
-
 #define TASKS_EVENTS_STRATUM_NEW_WORK       (1<<2)
-// // create job -> stratum
-// #define TASKS_EVENTS_STRATUM_GOT_WORK       (1<<3) // response to NEW_WORK
+#define TASKS_EVENTS_STRATUM_XN2_CHANGED    (1<<3)
 
-#define TASKS_EVENTS_STRATUM_XN2_CHANGED    (1<<4)
-// stratum -> create job
-#define TASKS_EVENTS_STRATUM_ABANDON_WORK   (1<<5)
-// create job -> stratum
-#define TASKS_EVENTS_STRATUM_WORK_ABANDONED (1<<6) // response to ABANDON_WORK
-
-// // create job -> asic
-// #define TASKS_EVENTS_NEW_JOB                (1<<7)
-// // asic -> create job
-// #define TASKS_EVENTS_GOT_JOB                (1<<8) // response to NEW_JOB
-// // create job -> asic
-// #define TASKS_EVENTS_ABANDON_JOBS           (1<<9)
-// // asic -> create job
-// #define TASKS_EVENTS_JOBS_ABANDONED         (1<<10) // response to ABANDON_JOBS
+#define TASKS_EVENTS_STRATUM_ABANDON_WORK   (1<<4)
+// asic -> stratum
+#define TASKS_EVENTS_STRATUM_WORK_ABANDONED (1<<5) // response to ABANDON_WORK
 
 #define TASKS_EVENTS_STRATUM_EVENTS         (\
     TASKS_EVENTS_POOL_DIFF_CHANGED | \
@@ -38,12 +25,8 @@ extern "C" {
     TASKS_EVENTS_STRATUM_ABANDON_WORK | \
     TASKS_EVENTS_STRATUM_XN2_CHANGED)
 
-// #define TASKS_EVENTS_JOB_EVENTS             (TASKS_EVENTS_NEW_JOB | TASKS_EVENTS_ABANDON_JOBS)
 
-
-extern EventGroupHandle_t tasks_events_handle;
-
-void tasks_events_init(void);
+extern EventGroupHandle_t const tasks_events_handle;
 
 static inline EventBits_t tasks_events_set_bits(const EventBits_t bits) {
     return xEventGroupSetBits(tasks_events_handle,bits);
@@ -77,6 +60,13 @@ static inline EventBits_t tasks_notify_abandon_work(void) {
     return tasks_events_set_bits(TASKS_EVENTS_STRATUM_ABANDON_WORK);
 }
 
+/**
+ * @brief Sends an ABANDON_WORK event and then waits for the WORK_ABANDONED event.
+ * 
+ * @param maxWait 
+ * @return true 
+ * @return false 
+ */
 static inline bool tasks_sync_abandon_work(const TickType_t maxWait) {
     return 
     (xEventGroupSync(tasks_events_handle,

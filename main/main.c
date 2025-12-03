@@ -22,8 +22,6 @@
 
 #include "cjson_helper.h"
 
-#include "tasks/tasks_events.h"
-
 static GlobalState GLOBAL_STATE;
 
 static const char * const TAG = "bitaxe";
@@ -61,9 +59,6 @@ void app_main(void)
         ESP_LOGE(TAG, "Failed to init device config");
         return;
     }
-
-    // Make sure the tasks we'll launch can communicate:
-    tasks_events_init();
 
     if (self_test(&GLOBAL_STATE)) return;
 
