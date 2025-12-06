@@ -13,8 +13,7 @@
 #include <sys/time.h>
 #include "esp_timer.h"
 #include <stdbool.h>
-#include "tasks_events.h"
-#include "mn_exchange.h"
+#include "asic_task_intf.h"
 
 
 #define MAX_RETRY_ATTEMPTS 3
@@ -31,22 +30,21 @@ static const char * primary_stratum_url;
 static uint16_t primary_stratum_port;
 
 
-static inline void publish_mining_notify(mining_notify* const mn) {
-    mining_notify* const old = shared_mn_xch(mn);
-    if(old != NULL) {
-        STRATUM_V1_free_mining_notify(old);
-    }
-    if(mn != NULL) {
-        ESP_LOGI(TAG, "Publishing new work.");
-        tasks_notify_stratum_new_work();
-    }
-}
+// static inline void publish_mining_notify(mining_notify* const mn) {
+//     // mining_notify* const old = shared_mn_xch(mn);
+//     // if(old != NULL) {
+//     //     STRATUM_V1_free_mining_notify(old);
+//     // }
+//     // if(mn != NULL) {
+//     //     ESP_LOGI(TAG, "Publishing new work.");
+//     //     asic_task_notify_new_work();
+//     // }
+//     asic_task_send_new_work(mn);
+// }
 
 static inline bool publish_abandon_work(void) {
     ESP_LOGI(TAG, "Publishing abandon_work.");
-    // Take back already published work, if we can:
-    publish_mining_notify(NULL);
-    return tasks_sync_abandon_work(1000 / portTICK_PERIOD_MS);
+    return asic_task_abandon_work(1000 / portTICK_PERIOD_MS);
 }
 
 
@@ -342,7 +340,7 @@ void stratum_task(void * pvParameters)
                 if(stratum_api_v1_message.should_abandon_work) {
                     publish_abandon_work();
                 }
-                publish_mining_notify(stratum_api_v1_message.mining_notification);
+                asic_task_send_new_work(stratum_api_v1_message.mining_notification);
 
             } else if (stratum_api_v1_message.method == MINING_SET_DIFFICULTY) {
                 ESP_LOGI(TAG, "Set pool difficulty: %ld", stratum_api_v1_message.new_difficulty);
@@ -350,7 +348,7 @@ void stratum_task(void * pvParameters)
                 GLOBAL_STATE->pool_difficulty = stratum_api_v1_message.new_difficulty;
                 GLOBAL_STATE->new_set_mining_difficulty_msg = true;
 
-                tasks_notify_diff_change();
+                asic_task_notify_diff_change();
 
             } else if (stratum_api_v1_message.method == MINING_SET_VERSION_MASK ||
                     stratum_api_v1_message.method == STRATUM_RESULT_VERSION_MASK) {
@@ -358,7 +356,7 @@ void stratum_task(void * pvParameters)
                 GLOBAL_STATE->version_mask = stratum_api_v1_message.version_mask;
                 GLOBAL_STATE->new_stratum_version_rolling_msg = true;
 
-                tasks_notify_version_change();
+                asic_task_notify_version_change();
 
             } else if (stratum_api_v1_message.method == MINING_SET_EXTRANONCE ||
                     stratum_api_v1_message.method == STRATUM_RESULT_SUBSCRIBE) {
@@ -376,7 +374,7 @@ void stratum_task(void * pvParameters)
                 GLOBAL_STATE->extranonce_2_len = stratum_api_v1_message.extranonce_2_len;
                 free(old_extranonce_str);
 
-                tasks_notify_xn2_change();
+                asic_task_notify_xn2_change();
                 
             } else if (stratum_api_v1_message.method == CLIENT_RECONNECT) {
                 ESP_LOGE(TAG, "Pool requested client reconnect...");

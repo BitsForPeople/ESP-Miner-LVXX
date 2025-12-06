@@ -44,7 +44,7 @@ static int current_screen_delay_ms;
 // static int screen_chars;
 static int screen_lines;
 
-static GlobalState * GLOBAL_STATE;
+// static GlobalState * GLOBAL_STATE;
 
 static lv_obj_t *self_test_message_label;
 static lv_obj_t *self_test_result_label;
@@ -337,8 +337,8 @@ static void screen_update_cb(lv_timer_t * timer)
         }
     }
 
-    if (GLOBAL_STATE->SELF_TEST_MODULE.is_active) {
-        SelfTestModule * self_test = &GLOBAL_STATE->SELF_TEST_MODULE;
+    if (GLOBAL_STATE.SELF_TEST_MODULE.is_active) {
+        SelfTestModule * self_test = &GLOBAL_STATE.SELF_TEST_MODULE;
         
         lv_label_set_text(self_test_message_label, self_test->message);
         
@@ -352,18 +352,18 @@ static void screen_update_cb(lv_timer_t * timer)
         return;
     }
 
-    if (GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update) {
-        if (strcmp(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_filename, lv_label_get_text(firmware_update_scr_filename_label)) != 0) {
-            lv_label_set_text(firmware_update_scr_filename_label, GLOBAL_STATE->SYSTEM_MODULE.firmware_update_filename);
+    if (GLOBAL_STATE.SYSTEM_MODULE.is_firmware_update) {
+        if (strcmp(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_filename, lv_label_get_text(firmware_update_scr_filename_label)) != 0) {
+            lv_label_set_text(firmware_update_scr_filename_label, GLOBAL_STATE.SYSTEM_MODULE.firmware_update_filename);
         }
-        if (strcmp(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, lv_label_get_text(firmware_update_scr_status_label)) != 0) {
-            lv_label_set_text(firmware_update_scr_status_label, GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status);
+        if (strcmp(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, lv_label_get_text(firmware_update_scr_status_label)) != 0) {
+            lv_label_set_text(firmware_update_scr_status_label, GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status);
         }
         screen_show(SCR_FIRMWARE);
         return;
     }
 
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule * module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     if (module->asic_status) {
         lv_label_set_text(asic_status_label, module->asic_status);
@@ -399,7 +399,7 @@ static void screen_update_cb(lv_timer_t * timer)
 
     current_screen_time_ms += SCREEN_UPDATE_MS;
 
-    PowerManagementModule * power_management = &GLOBAL_STATE->POWER_MANAGEMENT_MODULE;
+    PowerManagementModule * power_management = &GLOBAL_STATE.POWER_MANAGEMENT_MODULE;
 
     char *pool_url = module->is_using_fallback ? module->fallback_pool_url : module->pool_url;
     if (strcmp(lv_label_get_text(urls_mining_url_label), pool_url) != 0) {
@@ -442,7 +442,7 @@ static void screen_update_cb(lv_timer_t * timer)
     }
 
     int8_t rssi_value = -128;
-    if (GLOBAL_STATE->SYSTEM_MODULE.is_connected) {
+    if (GLOBAL_STATE.SYSTEM_MODULE.is_connected) {
         get_wifi_current_rssi(&rssi_value);
     }
 
@@ -530,7 +530,7 @@ static void uptime_update_cb(lv_timer_t * timer)
 {
     if (wifi_uptime_label) {
         char uptime[50];
-        uint32_t uptime_seconds = (esp_timer_get_time() - GLOBAL_STATE->SYSTEM_MODULE.start_time) / 1000000;
+        uint32_t uptime_seconds = (esp_timer_get_time() - GLOBAL_STATE.SYSTEM_MODULE.start_time) / 1000000;
 
         uint32_t days = uptime_seconds / (24 * 3600);
         uptime_seconds %= (24 * 3600);
@@ -560,10 +560,10 @@ esp_err_t screen_start(void * pvParameters)
     // screen_chars = lv_display_get_horizontal_resolution(NULL) / 6;
     screen_lines = lv_display_get_vertical_resolution(NULL) / 8;
 
-    GLOBAL_STATE = (GlobalState *) pvParameters;
+    // GLOBAL_STATE = (GlobalState *) pvParameters;
 
-    if (GLOBAL_STATE->SYSTEM_MODULE.is_screen_active) {
-        SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    if (GLOBAL_STATE.SYSTEM_MODULE.is_screen_active) {
+        SystemModule * module = &GLOBAL_STATE.SYSTEM_MODULE;
 
         screens[SCR_SELF_TEST] = create_scr_self_test();
         screens[SCR_OVERHEAT] = create_scr_overheat(module);
@@ -571,7 +571,7 @@ esp_err_t screen_start(void * pvParameters)
         screens[SCR_WELCOME] = create_scr_welcome(module);
         screens[SCR_FIRMWARE] = create_scr_firmware(module);
         screens[SCR_CONNECTION] = create_scr_connection(module);
-        screens[SCR_BITAXE_LOGO] = create_scr_bitaxe_logo(GLOBAL_STATE->DEVICE_CONFIG.family.name, GLOBAL_STATE->DEVICE_CONFIG.board_version);
+        screens[SCR_BITAXE_LOGO] = create_scr_bitaxe_logo(GLOBAL_STATE.DEVICE_CONFIG.family.name, GLOBAL_STATE.DEVICE_CONFIG.board_version);
         screens[SCR_OSMU_LOGO] = create_scr_osmu_logo();
         screens[SCR_URLS] = create_scr_urls(module);
         screens[SCR_STATS] = create_scr_stats();

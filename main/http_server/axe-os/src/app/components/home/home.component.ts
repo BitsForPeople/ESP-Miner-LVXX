@@ -10,6 +10,7 @@ import { ISystemInfo } from 'src/models/ISystemInfo';
 import { ISystemStatistics } from 'src/models/ISystemStatistics';
 import { Title } from '@angular/platform-browser';
 import { UIChart } from 'primeng/chart';
+import { ISystemInfoDash } from 'src/models/ISystemInfoDash';
 
 @Component({
   selector: 'app-home',
@@ -19,6 +20,7 @@ import { UIChart } from 'primeng/chart';
 export class HomeComponent implements OnInit, OnDestroy {
 
   public info$!: Observable<ISystemInfo>;
+  // public info$!: Observable<ISystemInfoDash>;
   public stats$!: Observable<ISystemStatistics>;
 
   public chartOptions: any;
@@ -320,7 +322,7 @@ export class HomeComponent implements OnInit, OnDestroy {
             info.hostname,
             (info.hashRate ? HashSuffixPipe.transform(info.hashRate * 1000000000) : false),
             (info.temp ? `${info.temp}${info.temp2 > -1 ? `/${info.temp2}` : ''}${info.vrTemp ? `/${info.vrTemp}` : ''} °C` : false),
-            (!info.power_fault ? `${info.power} W` : false),
+            // (!info.power_fault ? `${info.power} W` : false),
             (info.bestDiff ? info.bestDiff : false),
           ].filter(Boolean).join(' • ')
         );

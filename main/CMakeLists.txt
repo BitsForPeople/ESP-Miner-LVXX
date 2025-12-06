@@ -41,9 +41,12 @@ SRCS
     "./power/asic_reset.c"
 
     "cjson_helper.c"
-    "./tasks/tasks_events.cpp"
-    "./tasks/mn_exchange.c"
+    "./tasks/asic_task_intf.cpp"
+    # "./tasks/mn_exchange.c"
     "./tasks/bm_job_builder.c"
+    "./http_server/http_writer.cpp"
+    "./http_server/http_json_writer.cpp"
+    "./http_server/websocket_intf.cpp"
 
 INCLUDE_DIRS
     "."
@@ -93,29 +96,29 @@ if("$ENV{GITHUB_ACTIONS}" STREQUAL "true")
 
     spiffs_create_partition_image(www ${WEB_SRC_DIR}/dist/axe-os FLASH_IN_PROJECT)
 else()
-    find_program(NPM_EXECUTABLE npm PATHS "D:/temp/node-v24.11.0-win-x64")
-    if(NOT NPM_EXECUTABLE AND NOT EXISTS ${WEB_SRC_DIR}/dist)
-        message(FATAL_ERROR "npm is not found! Please install it to proceed.")
-    endif()
+    # find_program(NPM_EXECUTABLE npm PATHS "D:/temp/node-v24.11.0-win-x64")
+    # if(NOT NPM_EXECUTABLE AND NOT EXISTS ${WEB_SRC_DIR}/dist)
+    #     message(FATAL_ERROR "npm is not found! Please install it to proceed.")
+    # endif()
 
-    ExternalProject_Add(
-        web_ui_dist
-        PREFIX ${CMAKE_BINARY_DIR}/web_ui_dist
-        SOURCE_DIR ${WEB_SRC_DIR}
-        DOWNLOAD_COMMAND ""
-        CONFIGURE_COMMAND
-            ${NPM_EXECUTABLE}  i
-        USES_TERMINAL_BUILD true
-        BUILD_COMMAND
-            ${NPM_EXECUTABLE} run build
-        INSTALL_COMMAND ""
-        BUILD_ALWAYS OFF
-        BUILD_IN_SOURCE TRUE
-        BUILD_BYPRODUCTS
-            "${WEB_SRC_DIR}/dist/axe-os/index.html"
-    )
+    # ExternalProject_Add(
+    #     web_ui_dist
+    #     PREFIX ${CMAKE_BINARY_DIR}/web_ui_dist
+    #     SOURCE_DIR ${WEB_SRC_DIR}
+    #     DOWNLOAD_COMMAND ""
+    #     CONFIGURE_COMMAND
+    #         ${NPM_EXECUTABLE}  i
+    #     USES_TERMINAL_BUILD true
+    #     BUILD_COMMAND
+    #         ${NPM_EXECUTABLE} run build
+    #     INSTALL_COMMAND ""
+    #     BUILD_ALWAYS OFF
+    #     BUILD_IN_SOURCE TRUE
+    #     BUILD_BYPRODUCTS
+    #         "${WEB_SRC_DIR}/dist/axe-os/index.html"
+    # )
 
-    add_dependencies(${COMPONENT_LIB} web_ui_dist)
+    # add_dependencies(${COMPONENT_LIB} web_ui_dist)
 
-    spiffs_create_partition_image(www ${WEB_SRC_DIR}/dist/axe-os FLASH_IN_PROJECT DEPENDS web_ui_dist)
+    # spiffs_create_partition_image(www ${WEB_SRC_DIR}/dist/axe-os FLASH_IN_PROJECT DEPENDS web_ui_dist)
 endif()

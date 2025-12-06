@@ -13,7 +13,11 @@
 #include "device_config.h"
 #include "display.h"
 // #include "asic_drvr.h"
-#include "ptrqueue.h"
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define STRATUM_USER CONFIG_STRATUM_USER
 #define FALLBACK_STRATUM_USER CONFIG_FALLBACK_STRATUM_USER
@@ -119,5 +123,12 @@ typedef struct
     bool ASIC_initalized;
     bool psram_is_available;
 } GlobalState;
+
+
+extern GlobalState GLOBAL_STATE;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* GLOBAL_STATE_H_ */

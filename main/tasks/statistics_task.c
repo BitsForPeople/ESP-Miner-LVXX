@@ -1,11 +1,14 @@
 #include <stdint.h>
 #include <stdalign.h>
-#include <pthread.h>
+// #include <pthread.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+#include "freertos/semphr.h"
+
 #include "statistics_task.h"
 #include "global_state.h"
 #include "nvs_config.h"
@@ -21,17 +24,28 @@ static const char* const TAG = "statistics_task";
 
 static StatisticsNodePtr statisticsDataStart = NULL;
 static StatisticsNodePtr statisticsDataEnd = NULL;
-static pthread_mutex_t statisticsDataLock = PTHREAD_MUTEX_INITIALIZER;
+// static pthread_mutex_t statisticsDataLock = PTHREAD_MUTEX_INITIALIZER;
+
+static StaticSemaphore_t muxMem;
+static SemaphoreHandle_t mux;
+
+static void inline stats_lock(void) {
+    if(mux) {
+        xSemaphoreTake(mux,portMAX_DELAY);
+    }
+}
+
+static void inline stats_unlock(void) {
+    if(mux) {
+        xSemaphoreGive(mux);
+    }
+}
+
 
 static const uint16_t maxDataCount = 720;
 static uint16_t currentDataCount;
-// static uint16_t statsFrequency;
 
 static struct StatisticsData* statsBuffer;
-
-#include <assert.h>
-static_assert(sizeof(struct StatisticsData) == (44));
-
 
 static inline struct StatisticsData* allocStatNodes(const size_t cnt) {
     static const size_t ALIGN = alignof(struct StatisticsData);
@@ -53,7 +67,6 @@ static inline struct StatisticsData* getStatsBuffer(void) {
 
     struct StatisticsData* mem = statsBuffer;
 
-    // pthread_mutex_lock(&statisticsDataLock);
     {
         if(!mem) {
             currentDataCount = 0;
@@ -64,13 +77,12 @@ static inline struct StatisticsData* getStatsBuffer(void) {
             }
         }
     }
-    // pthread_mutex_unlock(&statisticsDataLock);
 
     return mem;
 }
 
 static inline void releaseStatsBuffer(void) {
-    pthread_mutex_lock(&statisticsDataLock);
+    stats_lock();
     {
         if(statsBuffer != NULL) {
             ESP_LOGI(TAG, "Releasing stats buffer.");
@@ -82,7 +94,7 @@ static inline void releaseStatsBuffer(void) {
             statsBuffer = NULL;
         }
     }
-    pthread_mutex_unlock(&statisticsDataLock);
+    stats_unlock();
 }
 
 static inline StatisticsNodePtr getNewNode(void) {
@@ -105,7 +117,7 @@ static StatisticsNodePtr addStatisticData(StatisticsNodePtr data)
 
     StatisticsNodePtr newData = NULL;
 
-    pthread_mutex_lock(&statisticsDataLock);
+    stats_lock();
     {
         if(currentDataCount < maxDataCount) {
             newData = getNewNode();
@@ -125,7 +137,7 @@ static StatisticsNodePtr addStatisticData(StatisticsNodePtr data)
         *newData = *data;
         newData->next = NULL;
     }
-    pthread_mutex_unlock(&statisticsDataLock);
+    stats_unlock();
 
     // create new data block or reuse first data block
     // if (currentDataCount < maxDataCount) {
@@ -194,7 +206,8 @@ bool statisticDataNext(StatisticsNodePtr prevNode, StatisticsNodePtr dataOut)
 
     StatisticsNodePtr data = NULL;
 
-    pthread_mutex_lock(&statisticsDataLock);
+    // pthread_mutex_lock(&statisticsDataLock);
+    stats_lock();
     {
 
         if(NULL == prevNode) {
@@ -208,7 +221,8 @@ bool statisticDataNext(StatisticsNodePtr prevNode, StatisticsNodePtr dataOut)
         }
 
     }
-    pthread_mutex_unlock(&statisticsDataLock);
+    // pthread_mutex_unlock(&statisticsDataLock);
+    stats_unlock();
 
     return NULL != data;
 }
@@ -216,7 +230,8 @@ bool statisticDataNext(StatisticsNodePtr prevNode, StatisticsNodePtr dataOut)
 void clearStatisticData()
 {
     if (NULL != statisticsDataStart) {
-        pthread_mutex_lock(&statisticsDataLock);
+        // pthread_mutex_lock(&statisticsDataLock);
+        stats_lock();
 
         StatisticsNextNodePtr nextNode = statisticsDataStart;
 
@@ -230,7 +245,8 @@ void clearStatisticData()
         statisticsDataEnd = NULL;
         currentDataCount = 0;
 
-        pthread_mutex_unlock(&statisticsDataLock);
+        // pthread_mutex_unlock(&statisticsDataLock);
+        stats_unlock();
     }
 }
 
@@ -246,6 +262,9 @@ bool statistics_set_collection_interval(uint16_t intervalSeconds);
 
 void statistics_init(void* const pvParameters)
 {
+    if(mux == NULL) {
+        mux = xSemaphoreCreateMutexStatic(&muxMem);
+    }
     if(statsTimerHdl == NULL) {
         GlobalState* const GLOBAL_STATE = (GlobalState *) pvParameters;
         statsTimerHdl = xTimerCreateStatic("stats",

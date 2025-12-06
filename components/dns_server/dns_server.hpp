@@ -122,7 +122,7 @@ namespace dnss {
 
             DNSServerInst(const dns_entry_pair_t* const entries, std::size_t num_entries) {
 
-                ESP_LOGI(TAG, "Creating.");
+                ESP_LOGD(TAG, "Creating.");
                 this->entries = std::make_unique<dns_entry_pair_t[]>(num_entries);
                 this->num_entries = num_entries;
 
@@ -134,7 +134,7 @@ namespace dnss {
                 this->evtgrp.clearBits(EB_REQUEST_STOP | EB_STOPPED);
                 this->sock = 0;
                 this->registerEventHandler();
-                ESP_LOGI(TAG, "Starting task.");
+                ESP_LOGD(TAG, "Starting task.");
                 if(
                     xTaskCreatePinnedToCore(dns_server_task, "dns_server", 4096, this, 5, &task, xPortGetCoreID())
                     == pdFALSE) {
@@ -144,7 +144,7 @@ namespace dnss {
             }
 
             void doStop() {
-                ESP_LOGI(TAG, "Stopping.");
+                ESP_LOGD(TAG, "Stopping.");
                 unregisterEventHandler(); 
                 // If we got here because of failed task creation, we don't want to wait for a non-existent task to terminate.
                 if(this->task) {
@@ -152,11 +152,11 @@ namespace dnss {
                     if((bits & EB_STOPPED) == 0) {
                         int s = sock.exchange(-1);
                         if(s >= 0) {
-                            ESP_LOGI(TAG, "Closing socket.");
+                            ESP_LOGD(TAG, "Closing socket.");
                             shutdown(s,0);
                             close(s);
                         }
-                        ESP_LOGI(TAG, "Waiting for task to terminate.");
+                        ESP_LOGD(TAG, "Waiting for task to terminate.");
                         evtgrp.waitForAnyBit(EB_STOPPED);
                     }
                 }
@@ -181,7 +181,7 @@ namespace dnss {
         }
 
         esp_err_t registerEventHandler(void) {
-            ESP_LOGI(TAG, "Registering WiFi listener.");
+            // ESP_LOGI(TAG, "Registering WiFi listener.");
             return esp_event_handler_register(
                 WIFI_EVENT, WIFI_EVENT_AP_STOP,
                 &DNSServerInst::event_handler_fn,
@@ -189,7 +189,7 @@ namespace dnss {
         }
 
         esp_err_t unregisterEventHandler(void) {
-            ESP_LOGI(TAG, "Un-registering WiFi listener.");
+            // ESP_LOGI(TAG, "Un-registering WiFi listener.");
             esp_err_t r = ESP_OK;
             // if(evtInst) {
                 r = xTimerPendFunctionCall(

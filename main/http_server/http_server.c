@@ -44,6 +44,9 @@
 #include "system.h"
 #include "websocket.h"
 
+#include "http_writer.h"
+#include "http_json_writer.h"
+
 // #include "wifi_event_listener.h"
 
 #define JSON_ALL_STATS_ELEMENT_SIZE 120
@@ -54,7 +57,7 @@ static const char * const CORS_TAG = "CORS";
 
 static char axeOSVersion[32];
 
-static GlobalState * GLOBAL_STATE;
+// static GlobalState * GLOBAL_STATE;
 static httpd_handle_t server = NULL;
 
 // static WifiEventListenerCtx_t evtCtx;
@@ -75,34 +78,37 @@ static esp_err_t GET_wifi_scan(httpd_req_t *req)
     // Give some time for the connected flag to take effect
     vTaskDelay(100 / portTICK_PERIOD_MS);
     
-    wifi_ap_record_simple_t ap_records[20];
-    uint16_t ap_count = 0;
+    wifi_ap_record_simple_t ap_records[16];
+    const unsigned maxCnt = sizeof(ap_records)/sizeof(ap_records[0]); 
+    uint16_t ap_count = maxCnt;
 
     esp_err_t err = wifi_scan(ap_records, &ap_count);
     if (err != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "WiFi scan failed");
         return ESP_OK;
     }
+    const unsigned cnt = ap_count < maxCnt ? ap_count : maxCnt;
 
-    cJSON *root = cJSON_CreateObject();
-    cJSON *networks = cJSON_CreateArray();
+    http_writer_t wrtr;
+    http_writer_t* const w = &wrtr;
+    http_writer_init(w,req);
 
-    for (int i = 0; i < ap_count; i++) {
-        cJSON *network = cJSON_CreateObject();
-        cJSON_AddStringToObject(network, "ssid", (char *)ap_records[i].ssid);
-        cJSON_AddNumberToObject(network, "rssi", ap_records[i].rssi);
-        cJSON_AddNumberToObject(network, "authmode", ap_records[i].authmode);
-        cJSON_AddItemToArray(networks, network);
+    http_json_start_obj(w,NULL);
+    http_json_start_arr(w, "networks");
+
+    for (unsigned i = 0; i < cnt; i++) {
+        http_json_start_obj(w,NULL);
+            http_json_write_item(w, "ssid", ap_records[i].ssid);
+            http_json_write_item(w, "rssi", ap_records[i].rssi);
+            http_json_write_item(w, "authmode", (int)(ap_records[i].authmode));
+        http_json_end_obj(w);
     }
 
-    cJSON_AddItemToObject(root, "networks", networks);
+    http_json_end_arr(w);
+    http_json_end_obj(w);
 
-    const char *response = cJSON_Print(root);
-    httpd_resp_sendstr(req, response);
+    return http_writer_finish(w);
 
-    free((void *)response);
-    cJSON_Delete(root);
-    return ESP_OK;
 }
 
 
@@ -116,7 +122,7 @@ static esp_err_t GET_wifi_scan(httpd_req_t *req)
 
 #define FILE_PATH_MAX (ESP_VFS_PATH_MAX + 128)
 #define SCRATCH_BUFSIZE (10240)
-#define MESSAGE_QUEUE_SIZE (128)
+// #define MESSAGE_QUEUE_SIZE (128)
 
 typedef struct rest_server_context
 {
@@ -149,17 +155,21 @@ static esp_err_t ip_in_private_range(uint32_t address) {
 
 static uint32_t extract_origin_ip_addr(char *origin)
 {
+    static const char PREFIX[] = "http://";
+    static const size_t PREFIX_LEN = sizeof(PREFIX)-1;
+
     char ip_str[16];
     uint32_t origin_ip_addr = 0;
 
     // Find the start of the IP address in the Origin header
-    const char *prefix = "http://";
-    char *ip_start = strstr(origin, prefix);
-    if (ip_start) {
-        ip_start += strlen(prefix); // Move past "http://"
+    // const char *prefix = "http://";
+    if(strncmp(origin,PREFIX,PREFIX_LEN) == 0) {
+        const char* const ip_start = origin + PREFIX_LEN; // strstr(origin, prefix);
+    // if (ip_start) {
+    //     ip_start += strlen(prefix); // Move past "http://"
 
         // Extract the IP address portion (up to the next '/')
-        char *ip_end = strchr(ip_start, '/');
+        const char* ip_end = strchr(ip_start, '/');
         size_t ip_len = ip_end ? (size_t)(ip_end - ip_start) : strlen(ip_start);
         if (ip_len < sizeof(ip_str)) {
             strncpy(ip_str, ip_start, ip_len);
@@ -182,7 +192,7 @@ static uint32_t extract_origin_ip_addr(char *origin)
 
 esp_err_t is_network_allowed(httpd_req_t * req)
 {
-    if (GLOBAL_STATE->SYSTEM_MODULE.ap_enabled == true) {
+    if (GLOBAL_STATE.SYSTEM_MODULE.ap_enabled == true) {
         ESP_LOGI(CORS_TAG, "Device in AP mode. Allowing CORS.");
         return ESP_OK;
     }
@@ -206,14 +216,16 @@ esp_err_t is_network_allowed(httpd_req_t * req)
     inet_ntop(AF_INET, &request_ip_addr, ipstr, sizeof(ipstr));
 
     // Attempt to get the Origin header.
-    char origin[128];
     uint32_t origin_ip_addr;
-    if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK) {
-        ESP_LOGD(CORS_TAG, "Origin header: %s", origin);
-        origin_ip_addr = extract_origin_ip_addr(origin);
-    } else {
-        ESP_LOGD(CORS_TAG, "No origin header found.");
-        origin_ip_addr = request_ip_addr;
+    {
+        char origin[128];
+        if (httpd_req_get_hdr_value_str(req, "Origin", origin, sizeof(origin)) == ESP_OK) {
+            ESP_LOGD(CORS_TAG, "Origin header: %s", origin);
+            origin_ip_addr = extract_origin_ip_addr(origin);
+        } else {
+            ESP_LOGD(CORS_TAG, "No origin header found.");
+            origin_ip_addr = request_ip_addr;
+        }
     }
 
     if (ip_in_private_range(origin_ip_addr) == ESP_OK && ip_in_private_range(request_ip_addr) == ESP_OK) {
@@ -234,11 +246,11 @@ static void readAxeOSVersion(void) {
         ESP_LOGI(TAG, "AxeOS version: %s", axeOSVersion);
 
         if (strcmp(axeOSVersion, esp_app_get_description()->version) != 0) {
-            ESP_LOGE(TAG, "Firmware (%s) and AxeOS (%s) versions do not match. Please make sure to update both www.bin and esp-miner.bin.", esp_app_get_description()->version, axeOSVersion);
+            ESP_LOGW(TAG, "Firmware (%s) and AxeOS (%s) versions do not match. Please make sure to update both www.bin and esp-miner.bin.", esp_app_get_description()->version, axeOSVersion);
         }
     } else {
         strcpy(axeOSVersion, "unknown");
-        ESP_LOGE(TAG, "Failed to open AxeOS version.txt");
+        ESP_LOGI(TAG, "Failed to open AxeOS version.txt");
     }
 }
 
@@ -280,26 +292,58 @@ void stop_webserver(httpd_handle_t server)
     }
 }
 
+typedef struct MimeMapping {
+    const char* ext;
+    const char* type;
+} MimeMapping_t;
+
+static const MimeMapping_t MIMES[] = {
+    {.ext = "html", .type = "text/html"},
+    {.ext = "js"  , .type = "application/javascript"},
+    {.ext = "css",  .type = "text/css"},
+    {.ext = "png",  .type = "image/png"},
+    {.ext = "ico",  .type = "image/x-icon"},
+    {.ext = "svg",  .type = "image/svg+xml"},
+    {.ext = "pdf",  .type = "application/pdf"},
+    {.ext = "woff2", .type = "font/woff2"},
+    {.ext = "html", .type = "text/html"}
+};
+
+static const unsigned NUM_MIMES = sizeof(MIMES) / sizeof(MIMES[0]);
+
 /* Set HTTP response content type according to file extension */
 static esp_err_t set_content_type_from_file(httpd_req_t * req, const char * filepath)
 {
     const char * type = "text/plain";
-    if (CHECK_FILE_EXTENSION(filepath, ".html")) {
-        type = "text/html";
-    } else if (CHECK_FILE_EXTENSION(filepath, ".js")) {
-        type = "application/javascript";
-    } else if (CHECK_FILE_EXTENSION(filepath, ".css")) {
-        type = "text/css";
-    } else if (CHECK_FILE_EXTENSION(filepath, ".png")) {
-        type = "image/png";
-    } else if (CHECK_FILE_EXTENSION(filepath, ".ico")) {
-        type = "image/x-icon";
-    } else if (CHECK_FILE_EXTENSION(filepath, ".svg")) {
-        type = "image/svg+xml";
-    } else if (CHECK_FILE_EXTENSION(filepath, ".pdf")) {
-        type = "application/pdf";
-    } else if (CHECK_FILE_EXTENSION(filepath, ".woff2")) {
-        type = "font/woff2";
+    // Get a pointer to the extension part of the filepath, i.e. the last '.' in the string.
+    const char* ext = strrchr(filepath,'.');
+    if(ext) {
+        ext += 1; // skip the '.'
+        if(*ext != '\0') {
+            for( unsigned i = 0; i < NUM_MIMES; ++i ) {
+                if(strcasecmp(ext,MIMES[i].ext) == 0) {
+                    type = MIMES[i].type;
+                    break;
+                }
+            }
+            // if (strcasecmp(ext,".html") == 0) {
+            //     type = "text/html";
+            // } else if (CHECK_FILE_EXTENSION(filepath, ".js")) {
+            //     type = "application/javascript";
+            // } else if (CHECK_FILE_EXTENSION(filepath, ".css")) {
+            //     type = "text/css";
+            // } else if (CHECK_FILE_EXTENSION(filepath, ".png")) {
+            //     type = "image/png";
+            // } else if (CHECK_FILE_EXTENSION(filepath, ".ico")) {
+            //     type = "image/x-icon";
+            // } else if (CHECK_FILE_EXTENSION(filepath, ".svg")) {
+            //     type = "image/svg+xml";
+            // } else if (CHECK_FILE_EXTENSION(filepath, ".pdf")) {
+            //     type = "application/pdf";
+            // } else if (CHECK_FILE_EXTENSION(filepath, ".woff2")) {
+            //     type = "font/woff2";
+            // }
+        }
     }
     return httpd_resp_set_type(req, type);
 }
@@ -344,6 +388,8 @@ static esp_err_t rest_recovery_handler(httpd_req_t * req)
 /* Send a 404 as JSON for unhandled api routes */
 static esp_err_t rest_api_common_handler(httpd_req_t * req)
 {
+    static const char ERR[] = "{\"error\":\"unknown route\"}";
+
     if (is_network_allowed(req) != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
     }
@@ -356,57 +402,94 @@ static esp_err_t rest_api_common_handler(httpd_req_t * req)
         return ESP_OK;
     }
 
-    cJSON * root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "error", "unknown route");
+    // cJSON * root = cJSON_CreateObject();
+    // cJSON_AddStringToObject(root, "error", "unknown route");
 
-    const char * error_obj = cJSON_Print(root);
+    // const char * error_obj = cJSON_Print(root);
     httpd_resp_set_status(req, HTTPD_404);
-    httpd_resp_sendstr(req, error_obj);
-    free((char *)error_obj);
-    cJSON_Delete(root);
+    httpd_resp_send(req,ERR,sizeof(ERR)-1);
+    // free((char *)error_obj);
+    // cJSON_Delete(root);
     return ESP_OK;
 }
 
-static bool file_exists(const char *path) {
-    struct stat buffer;
-    return (stat(path, &buffer) == 0);
+// static bool file_exists(const char *path) {
+//     struct stat buffer;
+//     return (stat(path, &buffer) == 0);
+// }
+
+static esp_err_t redirectToRoot(httpd_req_t* const req) {
+    static const char RSP[] = "Redirecting.";
+
+    ESP_LOGI(TAG, "Redirecting to root");
+
+    // Set status
+    httpd_resp_set_status(req, "302 Temporary Redirect");
+    // Redirect to the "/" root directory
+    httpd_resp_set_hdr(req, "Location", "/");
+    // iOS requires content in the response to detect a captive portal, simply redirecting is not sufficient.
+    return httpd_resp_send(req, RSP, sizeof(RSP)-1);
 }
 
 /* Send HTTP response with the contents of the requested file */
-static esp_err_t rest_common_get_handler(httpd_req_t * req)
+static esp_err_t file_serve_handler(httpd_req_t * req)
 {
     char filepath[FILE_PATH_MAX];
-    char gz_file[FILE_PATH_MAX];
-    uint8_t filePathLength = sizeof(filepath);
+    // char gz_file[FILE_PATH_MAX];
+    const size_t MAX_FP = sizeof(filepath)-3-1; // leave room for ".gz\0" at the end.
+    filepath[MAX_FP] = '\0';
 
+    // Build the file path to use from the base_path + the requested path (+ "index.html")
     rest_server_context_t * rest_context = (rest_server_context_t *) req->user_ctx;
-    strlcpy(filepath, rest_context->base_path, filePathLength);
-    if (req->uri[strlen(req->uri) - 1] == '/') {
-        strlcat(filepath, "/index.html", filePathLength);
-    } else {
-        strlcat(filepath, req->uri, filePathLength);
+
+    size_t fplen = strlcpy(filepath, rest_context->base_path, MAX_FP);
+    fplen += strlcpy(filepath + fplen, req->uri, MAX_FP - fplen);
+
+    if(fplen >= MAX_FP) {
+        return redirectToRoot(req);
     }
-    set_content_type_from_file(req, filepath);
+    const bool uri_is_dir = req->uri[strlen(req->uri) - 1] == '/';
+    if (uri_is_dir) {
+        fplen += strlcpy(filepath + fplen, "index.html", MAX_FP - fplen);
+        // strlcat(filepath, "/index.html", filePathLength);
+        if(fplen >= MAX_FP) {
+            return redirectToRoot(req);
+        }
+    } 
 
-    strlcpy(gz_file, filepath, filePathLength);
-    strlcat(gz_file, ".gz", filePathLength);
+    // Append ".gz\0" to the filepath.
+    filepath[fplen+0] = '.';
+    filepath[fplen+1] = 'g';
+    filepath[fplen+2] = 'z';
+    filepath[fplen+3] = '\0';
 
-    bool serve_gz = file_exists(gz_file);
-    const char *file_to_open = serve_gz ? gz_file : filepath;
+    // Try opening <filepath>.gz first:
+    bool serve_gz = true;
+    int fd = open(filepath, O_RDONLY, 0);
 
-    int fd = open(file_to_open, O_RDONLY, 0);
+    filepath[fplen] = '\0'; // cut off ".gz" again.
+
+    if(fd == -1) {
+        // <filepath>.gz not found. Try again with the original <filepath>.
+        serve_gz = false;
+        fd = open(filepath, O_RDONLY, 0);
+    }
+
     if (fd == -1) {
-        // Set status
-        httpd_resp_set_status(req, "302 Temporary Redirect");
-        // Redirect to the "/" root directory
-        httpd_resp_set_hdr(req, "Location", "/");
-        // iOS requires content in the response to detect a captive portal, simply redirecting is not sufficient.
-        httpd_resp_send(req, "Redirect to the captive portal", HTTPD_RESP_USE_STRLEN);
+        ESP_LOGI(TAG, "File not found: \"%s\"",filepath);
+        return redirectToRoot(req);
+        // // Set status
+        // httpd_resp_set_status(req, "302 Temporary Redirect");
+        // // Redirect to the "/" root directory
+        // httpd_resp_set_hdr(req, "Location", "/");
+        // // iOS requires content in the response to detect a captive portal, simply redirecting is not sufficient.
+        // httpd_resp_send(req, "Redirect to the captive portal", HTTPD_RESP_USE_STRLEN);
 
-        ESP_LOGI(TAG, "Redirecting to root");
-        return ESP_OK;
+        // ESP_LOGI(TAG, "Redirecting to root");
+        // return ESP_OK;
     }
-    if (req->uri[strlen(req->uri) - 1] != '/') {
+
+    if (!uri_is_dir) {
         httpd_resp_set_hdr(req, "Cache-Control", "max-age=2592000");
     }
 
@@ -414,23 +497,21 @@ static esp_err_t rest_common_get_handler(httpd_req_t * req)
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     }
 
-    char * chunk = rest_context->scratch;
+    set_content_type_from_file(req, filepath);
+
+    char* const chunk = rest_context->scratch;
     ssize_t read_bytes;
     do {
         /* Read file in chunks into the scratch buffer */
         read_bytes = read(fd, chunk, SCRATCH_BUFSIZE);
         if (read_bytes == -1) {
-            ESP_LOGE(TAG, "Failed to read file : %s", file_to_open);
+            ESP_LOGE(TAG, "Failed to read file : %s", filepath);
         } else if (read_bytes > 0) {
             /* Send the buffer contents as HTTP response chunk */
-            if (httpd_resp_send_chunk(req, chunk, read_bytes) != ESP_OK) {
+            esp_err_t r = httpd_resp_send_chunk(req, chunk, read_bytes);
+            if (r != ESP_OK) {
                 close(fd);
-                ESP_LOGE(TAG, "File sending failed!");
-                /* Abort sending file */
-                httpd_resp_sendstr_chunk(req, NULL);
-                /* Respond with 500 Internal Server Error */
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to send file");
-                return ESP_OK;
+                return r;
             }
         }
     } while (read_bytes > 0);
@@ -438,8 +519,7 @@ static esp_err_t rest_common_get_handler(httpd_req_t * req)
     close(fd);
     // ESP_LOGI(TAG, "File sending complete");
     /* Respond with an empty chunk to signal HTTP response completion */
-    httpd_resp_send_chunk(req, NULL, 0);
-    return ESP_OK;
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 static esp_err_t handle_options_request(httpd_req_t * req)
@@ -623,6 +703,94 @@ static esp_err_t POST_restart(httpd_req_t * req)
     return ESP_OK;
 }
 
+static void sendHeapInfo(http_writer_t* const w, const char* const heapName, const uint32_t caps) {
+
+    const size_t size = heap_caps_get_total_size(caps);
+    const size_t unused = heap_caps_get_free_size(caps);
+    const size_t minUnused = heap_caps_get_minimum_free_size(caps);
+
+    http_json_start_obj(w,NULL);
+
+        http_json_write_item(w, "name", heapName);
+
+        http_json_write_item(w, "size", size);
+        http_json_write_item(w, "free", unused);
+        http_json_write_item(w, "minFree", minUnused);
+        http_json_write_item(w, "used", size-unused);
+        http_json_write_item(w, "usedPercent", (100*(size-unused))/size);
+
+    http_json_end_obj(w);
+}
+
+/**
+ * @brief Output a string from NVS as a JSON item to the writer.
+ * 
+ * @param w 
+ * @param name 
+ * @param key 
+ * @param defaultValue 
+ * @return esp_err_t 
+ */
+static void http_json_write_nvss(http_writer_t* const w, const char* const name,
+                            const char* const key, const char* const defaultValue) {
+    char* const str = nvs_config_get_string(key,defaultValue);
+    http_json_write_item(w,name,str);
+    free(str);
+}
+
+static esp_err_t GET_system_info_dash(httpd_req_t* const req) {
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    httpd_resp_set_type(req, "application/json");
+
+    // Set CORS headers
+    if (set_cors_headers(req) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    http_writer_t wrtr;
+    http_writer_t* const w = &wrtr;
+    http_writer_init(w,req);
+
+    http_json_start_obj(w,NULL);
+    
+    http_json_write_nvss(w, "hostname", NVS_CONFIG_HOSTNAME, CONFIG_LWIP_LOCAL_HOSTNAME);
+    http_json_write_item(w, "hashRate", GLOBAL_STATE.SYSTEM_MODULE.current_hashrate);
+
+    http_json_write_item(w, "power", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.power);
+    http_json_write_item(w, "temp", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.chip_temp_avg);
+    http_json_write_item(w, "temp2", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.chip_temp2_avg);
+    http_json_write_item(w, "vrTemp", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.vr_temp);
+    http_json_write_item(w, "maxPower", GLOBAL_STATE.DEVICE_CONFIG.family.max_power);
+    http_json_write_item(w, "voltage", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.voltage);
+    http_json_write_item(w, "current", Power_get_current(&GLOBAL_STATE));
+    http_json_write_item(w, "nominalVoltage", GLOBAL_STATE.DEVICE_CONFIG.family.nominal_voltage);
+    http_json_write_item(w, "frequency", nvs_config_get_float(NVS_CONFIG_ASIC_FREQUENCY_FLOAT, CONFIG_ASIC_FREQUENCY));
+    http_json_write_item(w, "coreVoltage", nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE));
+    http_json_write_item(w, "coreVoltageActual", VCORE_get_voltage_mv(&GLOBAL_STATE));    
+
+    http_json_write_item(w, "isUsingFallbackStratum", GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback);
+
+    http_json_write_nvss(w, "stratumURL", NVS_CONFIG_STRATUM_URL,CONFIG_STRATUM_URL);
+    http_json_write_item(w, "stratumPort", nvs_config_get_u16(NVS_CONFIG_STRATUM_PORT, CONFIG_STRATUM_PORT));
+    http_json_write_nvss(w, "stratumUser", NVS_CONFIG_STRATUM_USER, CONFIG_STRATUM_USER);
+
+    http_json_write_nvss(w, "fallbackStratumURL", NVS_CONFIG_FALLBACK_STRATUM_URL, CONFIG_FALLBACK_STRATUM_URL);
+    http_json_write_item(w, "fallbackStratumPort", nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_PORT, CONFIG_FALLBACK_STRATUM_PORT));
+    http_json_write_nvss(w, "fallbackStratumUser", NVS_CONFIG_FALLBACK_STRATUM_USER, CONFIG_FALLBACK_STRATUM_USER);
+
+    http_json_write_item(w, "bestDiff", GLOBAL_STATE.SYSTEM_MODULE.best_diff_string);
+
+    http_json_write_item(w, "responseTime", GLOBAL_STATE.SYSTEM_MODULE.response_time);
+
+    http_json_end_obj(w);
+
+    return http_writer_finish(w);
+}
+
 /* Simple handler for getting system handler */
 static esp_err_t GET_system_info(httpd_req_t * req)
 {
@@ -638,200 +806,129 @@ static esp_err_t GET_system_info(httpd_req_t * req)
         return ESP_OK;
     }
 
-    char * ssid = nvs_config_get_string(NVS_CONFIG_WIFI_SSID, CONFIG_ESP_WIFI_SSID);
-    char * hostname = nvs_config_get_string(NVS_CONFIG_HOSTNAME, CONFIG_LWIP_LOCAL_HOSTNAME);
-    char * stratumURL = nvs_config_get_string(NVS_CONFIG_STRATUM_URL, CONFIG_STRATUM_URL);
-    char * fallbackStratumURL = nvs_config_get_string(NVS_CONFIG_FALLBACK_STRATUM_URL, CONFIG_FALLBACK_STRATUM_URL);
-    char * stratumUser = nvs_config_get_string(NVS_CONFIG_STRATUM_USER, CONFIG_STRATUM_USER);
-    char * fallbackStratumUser = nvs_config_get_string(NVS_CONFIG_FALLBACK_STRATUM_USER, CONFIG_FALLBACK_STRATUM_USER);
-    char * display = nvs_config_get_string(NVS_CONFIG_DISPLAY, "SSD1306 (128x32)");
+    // char * ssid = nvs_config_get_string(NVS_CONFIG_WIFI_SSID, CONFIG_ESP_WIFI_SSID);
+    // char * hostname = nvs_config_get_string(NVS_CONFIG_HOSTNAME, CONFIG_LWIP_LOCAL_HOSTNAME);
+    // char * stratumURL = nvs_config_get_string(NVS_CONFIG_STRATUM_URL, CONFIG_STRATUM_URL);
+    // char * fallbackStratumURL = nvs_config_get_string(NVS_CONFIG_FALLBACK_STRATUM_URL, CONFIG_FALLBACK_STRATUM_URL);
+    // char * stratumUser = nvs_config_get_string(NVS_CONFIG_STRATUM_USER, CONFIG_STRATUM_USER);
+    // char * fallbackStratumUser = nvs_config_get_string(NVS_CONFIG_FALLBACK_STRATUM_USER, CONFIG_FALLBACK_STRATUM_USER);
+    // char * display = nvs_config_get_string(NVS_CONFIG_DISPLAY, "SSD1306 (128x32)");
     float frequency = nvs_config_get_float(NVS_CONFIG_ASIC_FREQUENCY_FLOAT, CONFIG_ASIC_FREQUENCY);
-    float expected_hashrate = frequency * GLOBAL_STATE->DEVICE_CONFIG.family.asic.small_core_count * GLOBAL_STATE->DEVICE_CONFIG.family.asic_count / 1000.0;
+    float expected_hashrate = frequency * GLOBAL_STATE.DEVICE_CONFIG.family.asic.small_core_count * GLOBAL_STATE.DEVICE_CONFIG.family.asic_count / 1000.0;
 
     uint8_t mac[6];
     esp_wifi_get_mac(WIFI_IF_STA, mac);
     char formattedMac[18];
     snprintf(formattedMac, sizeof(formattedMac), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    int8_t wifi_rssi = -90;
+    int8_t wifi_rssi = -128;
     get_wifi_current_rssi(&wifi_rssi);
 
-    cJSON * root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "power", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.power);
-    cJSON_AddNumberToObject(root, "voltage", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.voltage);
-    cJSON_AddNumberToObject(root, "current", Power_get_current(GLOBAL_STATE));
-    cJSON_AddNumberToObject(root, "temp", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.chip_temp_avg);
-    cJSON_AddNumberToObject(root, "temp2", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.chip_temp2_avg);
-    cJSON_AddNumberToObject(root, "vrTemp", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.vr_temp);
-    cJSON_AddNumberToObject(root, "maxPower", GLOBAL_STATE->DEVICE_CONFIG.family.max_power);
-    cJSON_AddNumberToObject(root, "nominalVoltage", GLOBAL_STATE->DEVICE_CONFIG.family.nominal_voltage);
-    cJSON_AddNumberToObject(root, "hashRate", GLOBAL_STATE->SYSTEM_MODULE.current_hashrate);
-    cJSON_AddNumberToObject(root, "expectedHashrate", expected_hashrate);
-    cJSON_AddStringToObject(root, "bestDiff", GLOBAL_STATE->SYSTEM_MODULE.best_diff_string);
-    cJSON_AddStringToObject(root, "bestSessionDiff", GLOBAL_STATE->SYSTEM_MODULE.best_session_diff_string);
-    cJSON_AddNumberToObject(root, "poolDifficulty", GLOBAL_STATE->pool_difficulty);
+    http_writer_t wrtr;
+    http_writer_t* const w = &wrtr;
+    http_writer_init(w,req);
 
-    cJSON_AddNumberToObject(root, "isUsingFallbackStratum", GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback);
+    http_json_start_obj(w,NULL);
 
-    cJSON_AddNumberToObject(root, "isPSRAMAvailable", GLOBAL_STATE->psram_is_available);
+    http_json_write_item(w, "power", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.power);
+    http_json_write_item(w, "voltage", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.voltage);
+    http_json_write_item(w, "current", Power_get_current(&GLOBAL_STATE));
+    http_json_write_item(w, "temp", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.chip_temp_avg);
+    http_json_write_item(w, "temp2", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.chip_temp2_avg);
+    http_json_write_item(w, "vrTemp", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.vr_temp);
+    http_json_write_item(w, "maxPower", GLOBAL_STATE.DEVICE_CONFIG.family.max_power);
+    http_json_write_item(w, "nominalVoltage", GLOBAL_STATE.DEVICE_CONFIG.family.nominal_voltage);
+    http_json_write_item(w, "hashRate", GLOBAL_STATE.SYSTEM_MODULE.current_hashrate);
+    http_json_write_item(w, "expectedHashrate", expected_hashrate);
+    http_json_write_item(w, "bestDiff", GLOBAL_STATE.SYSTEM_MODULE.best_diff_string);
+    http_json_write_item(w, "bestSessionDiff", GLOBAL_STATE.SYSTEM_MODULE.best_session_diff_string);
+    http_json_write_item(w, "poolDifficulty", GLOBAL_STATE.pool_difficulty);
+    http_json_write_item(w, "isUsingFallbackStratum", GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback);
+    http_json_write_item(w, "isPSRAMAvailable", GLOBAL_STATE.psram_is_available);
 
-    cJSON_AddNumberToObject(root, "freeHeap", esp_get_free_heap_size());
-    cJSON_AddNumberToObject(root, "coreVoltage", nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE));
-    cJSON_AddNumberToObject(root, "coreVoltageActual", VCORE_get_voltage_mv(GLOBAL_STATE));
-    cJSON_AddNumberToObject(root, "frequency", frequency);
-    cJSON_AddStringToObject(root, "ssid", ssid);
-    cJSON_AddStringToObject(root, "macAddr", formattedMac);
-    cJSON_AddStringToObject(root, "hostname", hostname);
-    cJSON_AddStringToObject(root, "wifiStatus", GLOBAL_STATE->SYSTEM_MODULE.wifi_status);
-    cJSON_AddNumberToObject(root, "wifiRSSI", wifi_rssi);
-    cJSON_AddNumberToObject(root, "apEnabled", GLOBAL_STATE->SYSTEM_MODULE.ap_enabled);
-    cJSON_AddNumberToObject(root, "sharesAccepted", GLOBAL_STATE->SYSTEM_MODULE.shares_accepted);
-    cJSON_AddNumberToObject(root, "sharesRejected", GLOBAL_STATE->SYSTEM_MODULE.shares_rejected);
+    http_json_start_arr(w, "heapInfo");
 
-    cJSON *error_array = cJSON_CreateArray();
-    cJSON_AddItemToObject(root, "sharesRejectedReasons", error_array);
-    
-    for (int i = 0; i < GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats_count; i++) {
-        cJSON *error_obj = cJSON_CreateObject();
-        cJSON_AddStringToObject(error_obj, "message", GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats[i].message);
-        cJSON_AddNumberToObject(error_obj, "count", GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats[i].count);
-        cJSON_AddItemToArray(error_array, error_obj);
+    sendHeapInfo(w, "internal", MALLOC_CAP_INTERNAL);
+
+    if(GLOBAL_STATE.psram_is_available)
+    {
+        sendHeapInfo(w, "psram", MALLOC_CAP_SPIRAM);
     }
+   
+    http_json_end_arr(w);
 
-    cJSON_AddNumberToObject(root, "uptimeSeconds", (esp_timer_get_time() - GLOBAL_STATE->SYSTEM_MODULE.start_time) / 1000000);
-    cJSON_AddNumberToObject(root, "smallCoreCount", GLOBAL_STATE->DEVICE_CONFIG.family.asic.small_core_count);
-    cJSON_AddStringToObject(root, "ASICModel", GLOBAL_STATE->DEVICE_CONFIG.family.asic.name);
-    cJSON_AddStringToObject(root, "stratumURL", stratumURL);
-    cJSON_AddNumberToObject(root, "stratumPort", nvs_config_get_u16(NVS_CONFIG_STRATUM_PORT, CONFIG_STRATUM_PORT));
-    cJSON_AddStringToObject(root, "stratumUser", stratumUser);
-    cJSON_AddNumberToObject(root, "stratumSuggestedDifficulty", nvs_config_get_u16(NVS_CONFIG_STRATUM_DIFFICULTY, CONFIG_STRATUM_DIFFICULTY));
-    cJSON_AddNumberToObject(root, "stratumExtranonceSubscribe", nvs_config_get_u16(NVS_CONFIG_STRATUM_EXTRANONCE_SUBSCRIBE, STRATUM_EXTRANONCE_SUBSCRIBE));
-    cJSON_AddStringToObject(root, "fallbackStratumURL", fallbackStratumURL);
-    cJSON_AddNumberToObject(root, "fallbackStratumPort", nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_PORT, CONFIG_FALLBACK_STRATUM_PORT));
-    cJSON_AddStringToObject(root, "fallbackStratumUser", fallbackStratumUser);
-    cJSON_AddNumberToObject(root, "fallbackStratumSuggestedDifficulty", nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_DIFFICULTY, CONFIG_FALLBACK_STRATUM_DIFFICULTY));
-    cJSON_AddNumberToObject(root, "fallbackStratumExtranonceSubscribe", nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_EXTRANONCE_SUBSCRIBE, FALLBACK_STRATUM_EXTRANONCE_SUBSCRIBE));
-    cJSON_AddNumberToObject(root, "responseTime", GLOBAL_STATE->SYSTEM_MODULE.response_time);
+    http_json_write_item(w, "freeHeap", esp_get_free_heap_size());
+    http_json_write_item(w, "coreVoltage", nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE));
+    http_json_write_item(w, "coreVoltageActual", VCORE_get_voltage_mv(&GLOBAL_STATE));
+    http_json_write_item(w, "frequency", frequency);
+    http_json_write_nvss(w, "ssid", NVS_CONFIG_WIFI_SSID, CONFIG_ESP_WIFI_SSID);
+    http_json_write_item(w, "macAddr", formattedMac);
+    http_json_write_nvss(w, "hostname", NVS_CONFIG_HOSTNAME, CONFIG_LWIP_LOCAL_HOSTNAME);
+    http_json_write_item(w, "wifiStatus", GLOBAL_STATE.SYSTEM_MODULE.wifi_status);
+    http_json_write_item(w, "wifiRSSI", wifi_rssi);
+    http_json_write_item(w, "apEnabled", GLOBAL_STATE.SYSTEM_MODULE.ap_enabled);
+    http_json_write_item(w, "sharesAccepted", GLOBAL_STATE.SYSTEM_MODULE.shares_accepted);
+    http_json_write_item(w, "sharesRejected", GLOBAL_STATE.SYSTEM_MODULE.shares_rejected);
+	
 
-    cJSON_AddStringToObject(root, "version", esp_app_get_description()->version);
-    cJSON_AddStringToObject(root, "axeOSVersion", axeOSVersion);
+    http_json_start_arr(w, "sharesRejectedReasons");
 
-    cJSON_AddStringToObject(root, "idfVersion", esp_get_idf_version());
-    cJSON_AddStringToObject(root, "boardVersion", GLOBAL_STATE->DEVICE_CONFIG.board_version);
-    cJSON_AddStringToObject(root, "family", GLOBAL_STATE->DEVICE_CONFIG.family.name);
-    cJSON_AddStringToObject(root, "runningPartition", esp_ota_get_running_partition()->label);
+    {
+        const int cnt = GLOBAL_STATE.SYSTEM_MODULE.rejected_reason_stats_count;
+        if(cnt != 0) {
+            for (int i = 0; i < cnt; i++) {
+                http_json_start_obj(w,NULL);
 
-    cJSON_AddNumberToObject(root, "overheat_mode", nvs_config_get_u16(NVS_CONFIG_OVERHEAT_MODE, 0));
-    cJSON_AddNumberToObject(root, "overclockEnabled", nvs_config_get_u16(NVS_CONFIG_OVERCLOCK_ENABLED, 0));
-    cJSON_AddStringToObject(root, "display", display);
-    cJSON_AddNumberToObject(root, "rotation", nvs_config_get_u16(NVS_CONFIG_ROTATION, 0));
-    cJSON_AddNumberToObject(root, "invertscreen", nvs_config_get_u16(NVS_CONFIG_INVERT_SCREEN, 0));
-    cJSON_AddNumberToObject(root, "displayTimeout", nvs_config_get_i32(NVS_CONFIG_DISPLAY_TIMEOUT, -1));
+                http_json_write_item(w, "message", GLOBAL_STATE.SYSTEM_MODULE.rejected_reason_stats[i].message);
+                http_json_write_item(w, "count", GLOBAL_STATE.SYSTEM_MODULE.rejected_reason_stats[i].count);
 
-    cJSON_AddNumberToObject(root, "autofanspeed", nvs_config_get_u16(NVS_CONFIG_AUTO_FAN_SPEED, 1));
-
-    cJSON_AddNumberToObject(root, "fanspeed", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.fan_perc);
-    cJSON_AddNumberToObject(root, "minFanSpeed", nvs_config_get_u16(NVS_CONFIG_MIN_FAN_SPEED, 25));
-    cJSON_AddNumberToObject(root, "temptarget", nvs_config_get_u16(NVS_CONFIG_TEMP_TARGET, 60));
-    cJSON_AddNumberToObject(root, "fanrpm", GLOBAL_STATE->POWER_MANAGEMENT_MODULE.fan_rpm);
-
-    cJSON_AddNumberToObject(root, "statsFrequency", nvs_config_get_u16(NVS_CONFIG_STATISTICS_FREQUENCY, 0));
-
-    if (GLOBAL_STATE->SYSTEM_MODULE.power_fault > 0) {
-        cJSON_AddStringToObject(root, "power_fault", VCORE_get_fault_string(GLOBAL_STATE));
-    }
-
-    free(ssid);
-    free(hostname);
-    free(stratumURL);
-    free(fallbackStratumURL);
-    free(stratumUser);
-    free(fallbackStratumUser);
-    free(display);
-
-    const char * sys_info = cJSON_Print(root);
-    httpd_resp_sendstr(req, sys_info);
-    free((char *)sys_info);
-    cJSON_Delete(root);
-    return ESP_OK;
-}
-
-int create_json_statistics_all(cJSON * root)
-{
-    static const char* const label[12] = {
-            "hashRate", "temp", "vrTemp", "power", "voltage",
-            "current", "coreVoltageActual", "fanspeed", "fanrpm",
-            "wifiRSSI", "freeHeap", "timestamp"
-        };
-
-    int prebuffer = 0;
-
-    if (root) {
-        // create array for all statistics
-
-
-        cJSON * statsLabelArray = cJSON_CreateStringArray(label, 12);
-        cJSON_AddItemToObject(root, "labels", statsLabelArray);
-        prebuffer++;
-
-        cJSON * statsArray = cJSON_AddArrayToObject(root, "statistics");
-
-            
-        struct StatisticsData statsData;
-        // StatisticsNodePtr node = NULL;// *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
-
-        if(statisticDataNext(NULL,&statsData)) {
-            do {
-
-                cJSON *valueArray = cJSON_CreateArray();
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate_MHz / 1000.f));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.chipTemperature));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.vrTemperature));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.power));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.voltage));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.current));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.coreVoltageActual));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.fanSpeed));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.fanRPM));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.wifiRSSI));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.freeHeap));
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.timestamp));
-
-                cJSON_AddItemToArray(statsArray, valueArray);
-                prebuffer++;
-
-            } while(statisticDataNext(&statsData,&statsData));
+                http_json_end_obj(w);
+            }
         }
-
-        // if (NULL != GLOBAL_STATE->STATISTICS_MODULE.statisticsList) {
-
-        //     while (NULL != node) {
-        //         node = statisticData(node, &statsData);
-
-        //         cJSON *valueArray = cJSON_CreateArray();
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.chipTemperature));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.vrTemperature));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.power));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.voltage));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.current));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.coreVoltageActual));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.fanSpeed));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.fanRPM));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.wifiRSSI));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.freeHeap));
-        //         cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.timestamp));
-
-        //         cJSON_AddItemToArray(statsArray, valueArray);
-        //         prebuffer++;
-        //     }
-        // }
     }
 
-    return prebuffer;
+    http_json_end_arr(w);
+
+    http_json_write_item(w, "uptimeSeconds", (esp_timer_get_time() - GLOBAL_STATE.SYSTEM_MODULE.start_time) / 1000000);
+    http_json_write_item(w, "smallCoreCount", GLOBAL_STATE.DEVICE_CONFIG.family.asic.small_core_count);
+    http_json_write_item(w, "ASICModel", GLOBAL_STATE.DEVICE_CONFIG.family.asic.name);
+    http_json_write_nvss(w, "stratumURL", NVS_CONFIG_STRATUM_URL, CONFIG_STRATUM_URL);
+    http_json_write_item(w, "stratumPort", nvs_config_get_u16(NVS_CONFIG_STRATUM_PORT, CONFIG_STRATUM_PORT));
+    http_json_write_nvss(w, "stratumUser", NVS_CONFIG_STRATUM_USER, CONFIG_STRATUM_USER);
+    http_json_write_item(w, "stratumSuggestedDifficulty", nvs_config_get_u16(NVS_CONFIG_STRATUM_DIFFICULTY, CONFIG_STRATUM_DIFFICULTY));
+    http_json_write_item(w, "stratumExtranonceSubscribe", nvs_config_get_u16(NVS_CONFIG_STRATUM_EXTRANONCE_SUBSCRIBE, STRATUM_EXTRANONCE_SUBSCRIBE));
+    http_json_write_nvss(w, "fallbackStratumURL", NVS_CONFIG_FALLBACK_STRATUM_URL, CONFIG_FALLBACK_STRATUM_URL);
+    http_json_write_item(w, "fallbackStratumPort", nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_PORT, CONFIG_FALLBACK_STRATUM_PORT));
+    http_json_write_nvss(w, "fallbackStratumUser", NVS_CONFIG_FALLBACK_STRATUM_USER, CONFIG_FALLBACK_STRATUM_USER);
+    http_json_write_item(w, "fallbackStratumSuggestedDifficulty", nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_DIFFICULTY, CONFIG_FALLBACK_STRATUM_DIFFICULTY));
+    http_json_write_item(w, "fallbackStratumExtranonceSubscribe", nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_EXTRANONCE_SUBSCRIBE, FALLBACK_STRATUM_EXTRANONCE_SUBSCRIBE));
+    http_json_write_item(w, "responseTime", GLOBAL_STATE.SYSTEM_MODULE.response_time);
+    http_json_write_item(w, "version", esp_app_get_description()->version);
+    http_json_write_item(w, "axeOSVersion", axeOSVersion);
+    http_json_write_item(w, "idfVersion", esp_get_idf_version());
+    http_json_write_item(w, "boardVersion", GLOBAL_STATE.DEVICE_CONFIG.board_version);
+    http_json_write_item(w, "family", GLOBAL_STATE.DEVICE_CONFIG.family.name);
+    http_json_write_item(w, "runningPartition", esp_ota_get_running_partition()->label);
+    http_json_write_item(w, "overheat_mode", nvs_config_get_u16(NVS_CONFIG_OVERHEAT_MODE, 0));
+    http_json_write_item(w, "overclockEnabled", nvs_config_get_u16(NVS_CONFIG_OVERCLOCK_ENABLED, 0));
+    http_json_write_nvss(w, "display", NVS_CONFIG_DISPLAY, "SSD1306 (128x32)");
+    http_json_write_item(w, "rotation", nvs_config_get_u16(NVS_CONFIG_ROTATION, 0));
+    http_json_write_item(w, "invertscreen", nvs_config_get_u16(NVS_CONFIG_INVERT_SCREEN, 0));
+    http_json_write_item(w, "displayTimeout", nvs_config_get_i32(NVS_CONFIG_DISPLAY_TIMEOUT, -1));
+    http_json_write_item(w, "autofanspeed", nvs_config_get_u16(NVS_CONFIG_AUTO_FAN_SPEED, 1));
+    http_json_write_item(w, "fanspeed", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.fan_perc);
+    http_json_write_item(w, "minFanSpeed", nvs_config_get_u16(NVS_CONFIG_MIN_FAN_SPEED, 25));
+    http_json_write_item(w, "temptarget", nvs_config_get_u16(NVS_CONFIG_TEMP_TARGET, 60));
+    http_json_write_item(w, "fanrpm", GLOBAL_STATE.POWER_MANAGEMENT_MODULE.fan_rpm);
+    http_json_write_item(w, "statsFrequency", nvs_config_get_u16(NVS_CONFIG_STATISTICS_FREQUENCY, 0));
+    
+    http_json_end_obj(w);
+    http_writer_finish(w);
+
+    return w->result;
 }
 
-int create_json_statistics_dashboard(cJSON * root)
+static int create_json_statistics_dashboard(cJSON * root)
 {
     int prebuffer = 0;
 
@@ -840,7 +937,7 @@ int create_json_statistics_dashboard(cJSON * root)
         cJSON * statsArray = cJSON_AddArrayToObject(root, "statistics");
 
         struct StatisticsData statsData;
-        // StatisticsNodePtr node = NULL;// *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
+        // StatisticsNodePtr node = NULL;// *GLOBAL_STATE.STATISTICS_MODULE.statisticsList; // double pointer
 
         if(statisticDataNext(NULL,&statsData)) {
             do {
@@ -857,8 +954,8 @@ int create_json_statistics_dashboard(cJSON * root)
         }
         // struct StatisticsData statsData;
         // StatisticsNodePtr node = statisticData(NULL,&statsData)
-        // if (NULL != GLOBAL_STATE->STATISTICS_MODULE.statisticsList) {
-        //     StatisticsNodePtr node = *GLOBAL_STATE->STATISTICS_MODULE.statisticsList; // double pointer
+        // if (NULL != GLOBAL_STATE.STATISTICS_MODULE.statisticsList) {
+        //     StatisticsNodePtr node = *GLOBAL_STATE.STATISTICS_MODULE.statisticsList; // double pointer
 
 
         //     while (NULL != node) {
@@ -880,6 +977,40 @@ int create_json_statistics_dashboard(cJSON * root)
     return prebuffer;
 }
 
+static const char LABELS[] = ",\"labels\":[\"hashRate\",\"temp\",\"vrTemp\",\"power\",\"voltage\",\"current\",\"coreVoltageActual\",\"fanspeed\",\"fanrpm\",\"wifiRSSI\",\"freeHeap\",\"timestamp\"]";
+
+static esp_err_t sendStats(httpd_req_t* const req) {
+
+    http_writer_t wrtr;
+    http_writer_t* const w = &wrtr;    
+    http_writer_init(w,req);
+
+    http_json_start_obj(w,NULL);
+
+    http_json_write_item(w,"currentTimestamp", (esp_timer_get_time() / (1000*100)));
+
+    http_writer_write_data(w,LABELS,sizeof(LABELS)-1);
+
+    http_json_start_arr(w,"statistics");
+
+    {
+        struct StatisticsData statsData;
+        bool more = statisticDataNext(NULL,&statsData);
+        while(more) {
+            more = (http_json_write_stats(w,&statsData) == ESP_OK);
+            more = more && statisticDataNext(&statsData,&statsData); 
+        }
+    }
+
+    http_json_end_arr(w);
+    http_json_end_obj(w);
+
+    http_writer_finish(w);
+    
+    return w->result;
+
+}
+
 static esp_err_t GET_system_statistics(httpd_req_t * req)
 {
     if (is_network_allowed(req) != ESP_OK) {
@@ -894,19 +1025,7 @@ static esp_err_t GET_system_statistics(httpd_req_t * req)
         return ESP_OK;
     }
 
-    cJSON * root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "currentTimestamp", (esp_timer_get_time() / 1000));
-    int prebuffer = 1;
-
-    prebuffer += create_json_statistics_all(root);
-
-    const char * response = cJSON_PrintBuffered(root, (JSON_ALL_STATS_ELEMENT_SIZE * prebuffer), 0); // unformatted
-    httpd_resp_sendstr(req, response);
-    free((void *)response);
-
-    cJSON_Delete(root);
-
-    return ESP_OK;
+    return sendStats(req);
 }
 
 static esp_err_t GET_system_statistics_dashboard(httpd_req_t * req)
@@ -952,9 +1071,9 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
         return ESP_OK;
     }
 
-    GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = true;
-    snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_filename, 20, "www.bin");
-    snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Starting...");
+    GLOBAL_STATE.SYSTEM_MODULE.is_firmware_update = true;
+    snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_filename, 20, "www.bin");
+    snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Starting...");
 
     char buf[1000];
     int remaining = req->content_len;
@@ -981,20 +1100,20 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
         if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
             continue;
         } else if (recv_len <= 0) {
-            snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Protocol Error");
+            snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Protocol Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Protocol Error");
             return ESP_OK;
         }
 
         if (esp_partition_write(www_partition, www_partition->size - remaining, (const void *) buf, recv_len) != ESP_OK) {
-            snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Write Error");
+            snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Write Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write Error");
             return ESP_OK;
         }
 
 
         uint8_t percentage = 100 - ((remaining * 100 / req->content_len));
-        snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Working (%d%%)", percentage);
+        snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Working (%d%%)", percentage);
 
         remaining -= recv_len;
     }
@@ -1003,9 +1122,9 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
 
     readAxeOSVersion();
 
-    snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Finished...");
+    snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Finished...");
     vTaskDelay(1000 / portTICK_PERIOD_MS);
-    GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
+    GLOBAL_STATE.SYSTEM_MODULE.is_firmware_update = false;
 
     return ESP_OK;
 }
@@ -1027,9 +1146,9 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
         return ESP_OK;
     }
     
-    GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = true;
-    snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_filename, 20, "esp-miner.bin");
-    snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Starting...");
+    GLOBAL_STATE.SYSTEM_MODULE.is_firmware_update = true;
+    snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_filename, 20, "esp-miner.bin");
+    snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Starting...");
 
     char buf[1000];
     esp_ota_handle_t ota_handle;
@@ -1047,7 +1166,7 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
 
             // Serious Error: Abort OTA
         } else if (recv_len <= 0) {
-            snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Protocol Error");
+            snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Protocol Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Protocol Error");
             return ESP_OK;
         }
@@ -1055,26 +1174,26 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
         // Successful Upload: Flash firmware chunk
         if (esp_ota_write(ota_handle, (const void *) buf, recv_len) != ESP_OK) {
             esp_ota_abort(ota_handle);
-            snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Write Error");
+            snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Write Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write Error");
             return ESP_OK;
         }
 
         uint8_t percentage = 100 - ((remaining * 100 / req->content_len));
 
-        snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Working (%d%%)", percentage);
+        snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Working (%d%%)", percentage);
 
         remaining -= recv_len;
     }
 
     // Validate and switch to new OTA image and reboot
     if (esp_ota_end(ota_handle) != ESP_OK || esp_ota_set_boot_partition(ota_partition) != ESP_OK) {
-        snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Validation Error");
+        snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Validation Error");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Validation / Activation Error");
         return ESP_OK;
     }
 
-    snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Rebooting...");
+    snprintf(GLOBAL_STATE.SYSTEM_MODULE.firmware_update_status, 20, "Rebooting...");
 
     httpd_resp_sendstr(req, "Firmware update complete, rebooting now!\n");
     ESP_LOGI(TAG, "Restarting System because of Firmware update complete");
@@ -1101,10 +1220,6 @@ esp_err_t http_404_error_handler(httpd_req_t * req, httpd_err_code_t err)
 
 esp_err_t start_rest_server(void * pvParameters)
 {
-    GLOBAL_STATE = (GlobalState *) pvParameters;
-    
-    // Initialize the ASIC API with the global state
-    asic_api_init(GLOBAL_STATE);
     const char * base_path = "";
 
     bool enter_recovery = false;
@@ -1115,163 +1230,197 @@ esp_err_t start_rest_server(void * pvParameters)
     }
 
     REST_CHECK(base_path, "wrong base path", err);
-    rest_server_context_t * rest_context = heap_caps_calloc(1,sizeof(rest_server_context_t),MALLOC_CAP_SPIRAM);
-    if(rest_context == NULL) {
-        ESP_LOGI(TAG, "Could not allocate from PSRAM; trying default allocation.");
-        rest_context = calloc(1,sizeof(rest_server_context_t));
-    }
-    // calloc(1, sizeof(rest_server_context_t));
+    rest_server_context_t* rest_context = (rest_server_context_t*)allocPrefPSRAM(sizeof(rest_server_context_t));
+
     REST_CHECK(rest_context, "No memory for rest context", err);
     strlcpy(rest_context->base_path, base_path, sizeof(rest_context->base_path));
 
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.uri_match_fn = httpd_uri_match_wildcard;
-    config.stack_size = 8192;
-    config.max_open_sockets = 20;
-    config.max_uri_handlers = 20;
-    config.close_fn = websocket_close_fn;
-    config.lru_purge_enable = true;
+    {
+        httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+        config.uri_match_fn = httpd_uri_match_wildcard;
+        config.stack_size = 8192;
+        config.max_open_sockets = 20;
+        config.max_uri_handlers = 20;
+        config.close_fn = websocket_close_fn;
+        config.lru_purge_enable = true;
 
-    ESP_LOGI(TAG, "Starting HTTP Server");
-    REST_CHECK(httpd_start(&server, &config) == ESP_OK, "Start server failed", err_start);
-
-    httpd_uri_t recovery_explicit_get_uri = {
-        .uri = "/recovery", 
-        .method = HTTP_GET, 
-        .handler = rest_recovery_handler, 
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &recovery_explicit_get_uri);
-    
+        ESP_LOGI(TAG, "Starting HTTP Server");
+        REST_CHECK(httpd_start(&server, &config) == ESP_OK, "Start server failed", err_start);
+    }
+    {
+        const httpd_uri_t recovery_explicit_get_uri = {
+            .uri = "/recovery", 
+            .method = HTTP_GET, 
+            .handler = rest_recovery_handler, 
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &recovery_explicit_get_uri);
+    }
     // Register theme API endpoints
     ESP_ERROR_CHECK(register_theme_api_endpoints(server, rest_context));
 
-    /* URI handler for fetching system info */
-    httpd_uri_t system_info_get_uri = {
-        .uri = "/api/system/info", 
-        .method = HTTP_GET, 
-        .handler = GET_system_info, 
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &system_info_get_uri);
+    {
+        /* URI handler for fetching system info values for dashboard */
+        const httpd_uri_t system_info_dash_get_uri = {
+            .uri = "/api/system/info/dash", 
+            .method = HTTP_GET, 
+            .handler = GET_system_info_dash,
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &system_info_dash_get_uri);
+    }
 
-    /* URI handler for fetching system asic values */
-    httpd_uri_t system_asic_get_uri = {
-        .uri = "/api/system/asic", 
-        .method = HTTP_GET, 
-        .handler = GET_system_asic, 
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &system_asic_get_uri);
+    {
+        /* URI handler for fetching system info */
+        const httpd_uri_t system_info_get_uri = {
+            .uri = "/api/system/info", 
+            .method = HTTP_GET, 
+            .handler = GET_system_info, 
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &system_info_get_uri);
+    }
 
-    /* URI handler for fetching system statistic values */
-    httpd_uri_t system_statistics_get_uri = {
-        .uri = "/api/system/statistics", 
-        .method = HTTP_GET, 
-        .handler = GET_system_statistics, 
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &system_statistics_get_uri);
+    {
+        /* URI handler for fetching system asic values */
+        const httpd_uri_t system_asic_get_uri = {
+            .uri = "/api/system/asic", 
+            .method = HTTP_GET, 
+            .handler = GET_system_asic, 
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &system_asic_get_uri);
+    }
+    {
+        /* URI handler for fetching system statistic values */
+        const httpd_uri_t system_statistics_get_uri = {
+            .uri = "/api/system/statistics", 
+            .method = HTTP_GET, 
+            .handler = GET_system_statistics, 
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &system_statistics_get_uri);
+    }
+    {
+        /* URI handler for fetching system statistic values for dashboard */
+        const httpd_uri_t system_statistics_dashboard_get_uri = {
+            .uri = "/api/system/statistics/dashboard", 
+            .method = HTTP_GET, 
+            .handler = GET_system_statistics_dashboard, 
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &system_statistics_dashboard_get_uri);
+    }
 
-    /* URI handler for fetching system statistic values for dashboard */
-    httpd_uri_t system_statistics_dashboard_get_uri = {
-        .uri = "/api/system/statistics/dashboard", 
-        .method = HTTP_GET, 
-        .handler = GET_system_statistics_dashboard, 
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &system_statistics_dashboard_get_uri);
+    {
+        /* URI handler for WiFi scan */
+        const httpd_uri_t wifi_scan_get_uri = {
+            .uri = "/api/system/wifi/scan",
+            .method = HTTP_GET,
+            .handler = GET_wifi_scan,
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &wifi_scan_get_uri);
+    }
 
-    /* URI handler for WiFi scan */
-    httpd_uri_t wifi_scan_get_uri = {
-        .uri = "/api/system/wifi/scan",
-        .method = HTTP_GET,
-        .handler = GET_wifi_scan,
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &wifi_scan_get_uri);
+    {
+        const httpd_uri_t system_restart_uri = {
+            .uri = "/api/system/restart", .method = HTTP_POST, 
+            .handler = POST_restart, 
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &system_restart_uri);
+    }
+    {
+        const httpd_uri_t system_restart_options_uri = {
+            .uri = "/api/system/restart", 
+            .method = HTTP_OPTIONS, 
+            .handler = handle_options_request, 
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &system_restart_options_uri);
+    }
+    {
+        const httpd_uri_t update_system_settings_uri = {
+            .uri = "/api/system", 
+            .method = HTTP_PATCH, 
+            .handler = PATCH_update_settings, 
+            .user_ctx = rest_context
+        };
+        httpd_register_uri_handler(server, &update_system_settings_uri);
+    }
 
-    httpd_uri_t system_restart_uri = {
-        .uri = "/api/system/restart", .method = HTTP_POST, 
-        .handler = POST_restart, 
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &system_restart_uri);
+    {
+        const httpd_uri_t system_options_uri = {
+            .uri = "/api/system",
+            .method = HTTP_OPTIONS,
+            .handler = handle_options_request,
+            .user_ctx = NULL,
+        };
+        httpd_register_uri_handler(server, &system_options_uri);
+    }
 
-    httpd_uri_t system_restart_options_uri = {
-        .uri = "/api/system/restart", 
-        .method = HTTP_OPTIONS, 
-        .handler = handle_options_request, 
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(server, &system_restart_options_uri);
+    {
+        const httpd_uri_t update_post_ota_firmware = {
+            .uri = "/api/system/OTA", 
+            .method = HTTP_POST, 
+            .handler = POST_OTA_update, 
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &update_post_ota_firmware);
+    }
 
-    httpd_uri_t update_system_settings_uri = {
-        .uri = "/api/system", 
-        .method = HTTP_PATCH, 
-        .handler = PATCH_update_settings, 
-        .user_ctx = rest_context
-    };
-    httpd_register_uri_handler(server, &update_system_settings_uri);
+    {
+        const httpd_uri_t update_post_ota_www = {
+            .uri = "/api/system/OTAWWW", 
+            .method = HTTP_POST, 
+            .handler = POST_WWW_update, 
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &update_post_ota_www);
+    }
 
-    httpd_uri_t system_options_uri = {
-        .uri = "/api/system",
-        .method = HTTP_OPTIONS,
-        .handler = handle_options_request,
-        .user_ctx = NULL,
-    };
-    httpd_register_uri_handler(server, &system_options_uri);
-
-    httpd_uri_t update_post_ota_firmware = {
-        .uri = "/api/system/OTA", 
-        .method = HTTP_POST, 
-        .handler = POST_OTA_update, 
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(server, &update_post_ota_firmware);
-
-    httpd_uri_t update_post_ota_www = {
-        .uri = "/api/system/OTAWWW", 
-        .method = HTTP_POST, 
-        .handler = POST_WWW_update, 
-        .user_ctx = NULL
-    };
-    httpd_register_uri_handler(server, &update_post_ota_www);
-
-    httpd_uri_t ws = {
-        .uri = "/api/ws", 
-        .method = HTTP_GET, 
-        .handler = websocket_handler, 
-        .user_ctx = NULL, 
-        .is_websocket = true
-    };
-    httpd_register_uri_handler(server, &ws);
+    {
+        const httpd_uri_t ws = {
+            .uri = "/api/ws", 
+            .method = HTTP_GET, 
+            .handler = websocket_handler, 
+            .user_ctx = NULL, 
+            .is_websocket = true
+        };
+        httpd_register_uri_handler(server, &ws);
+    }
 
     if (enter_recovery) {
         /* Make default route serve Recovery */
-        httpd_uri_t recovery_implicit_get_uri = {
-            .uri = "/*", .method = HTTP_GET, 
+        const httpd_uri_t recovery_implicit_get_uri = {
+            .uri = "/*",
+            .method = HTTP_GET, 
             .handler = rest_recovery_handler, 
             .user_ctx = rest_context
         };
         httpd_register_uri_handler(server, &recovery_implicit_get_uri);
 
     } else {
-        httpd_uri_t api_common_uri = {
-            .uri = "/api/*",
-            .method = HTTP_ANY,
-            .handler = rest_api_common_handler,
-            .user_ctx = rest_context
-        };
-        httpd_register_uri_handler(server, &api_common_uri);
-        /* URI handler for getting web server files */
-        httpd_uri_t common_get_uri = {
-            .uri = "/*", 
-            .method = HTTP_GET, 
-            .handler = rest_common_get_handler, 
-            .user_ctx = rest_context
-        };
-        httpd_register_uri_handler(server, &common_get_uri);
+        {
+            const httpd_uri_t api_common_uri = {
+                .uri = "/api/*",
+                .method = HTTP_ANY,
+                .handler = rest_api_common_handler,
+                .user_ctx = rest_context
+            };
+            httpd_register_uri_handler(server, &api_common_uri);
+        }
+        {
+            /* URI handler for getting web server files */
+            const httpd_uri_t common_get_uri = {
+                .uri = "/*", 
+                .method = HTTP_GET, 
+                .handler = file_serve_handler, 
+                .user_ctx = rest_context
+            };
+            httpd_register_uri_handler(server, &common_get_uri);
+        }
     }
 
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_error_handler);
@@ -1279,14 +1428,11 @@ esp_err_t start_rest_server(void * pvParameters)
     // Start websocket log handler thread
     xTaskCreate(websocket_task, "websocket_task", 4096, server, 2, NULL);
 
-    // Start the DNS server that will redirect all queries to the softAP IP
-    const dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*" /* all A queries */, "WIFI_AP_DEF" /* softAP netif ID */);
-    dns_server_start(dns_config.item,dns_config.num_of_entries);
-    // dns_server_handle_t dnsHdl = start_dns_server(&dns_config);
-    // evtCtx.dnsHdl = dnsHdl;
-    // if(dnsHdl) {
-    //     wifi_event_listener_start(&evtCtx);
-    // }
+    {
+        // Start the DNS server that will redirect all queries to the softAP IP
+        const dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*" /* all A queries */, "WIFI_AP_DEF" /* softAP netif ID */);
+        dns_server_start(dns_config.item,dns_config.num_of_entries);
+    }
 
     return ESP_OK;
 err_start:

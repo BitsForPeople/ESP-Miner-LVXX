@@ -35,8 +35,8 @@ static inline uintptr_t headroom(const void* mem) {
     uintptr_t m = (uintptr_t)mem;
     return std::numeric_limits<uintptr_t>::max() - m;
 }
-template<typename T>
-static inline T* find_u8_t(const T* mem, unsigned maxLen, const uint8_t value) {
+
+void* mem_find_u8(const void* mem, unsigned maxLen, const uint8_t value) {
     if(maxLen > 0) [[likely]] {
         maxLen = min(maxLen, headroom(mem));
         uintptr_t end = (uintptr_t)mem + maxLen;
@@ -126,11 +126,7 @@ static inline T* find_u8_t(const T* mem, unsigned maxLen, const uint8_t value) {
             }
         }
     }
-    return const_cast<T*>(mem);    
-}
-
-void* mem_find_u8(const void* mem, const unsigned maxLen, const uint8_t value) {
-    return find_u8_t(mem,maxLen,value);
+    return const_cast<void*>(mem);    
 }
 
 char* mem_findStrEnd(const char* str, const unsigned maxLen) {
@@ -160,12 +156,6 @@ char* mem_findInStr(const char* str, const char ch, unsigned maxLen) {
                 : "+m" (dummy)
                 : [ch] "r" (&ch), "m" (ch), "m" (*(const char(*)[maxLen])str)
             );
-            
-            // const char* end = str + maxLen;
-            // if(end < str) {
-            //     end = (const char*)-1;
-            //     maxLen = end-str;
-            // }
 
             uint32_t tmp = ((maxLen+15)/16);
             asm (
@@ -224,69 +214,4 @@ char* mem_findInStr(const char* str, const char ch, unsigned maxLen) {
 
 char* mem_findLineEnd(const char* str, unsigned maxLen) {
     return mem_findInStr(str, '\n', maxLen);
-    // static const char NL = '\n';
-    // if(maxLen > 0) {
-    //     uint32_t dummy;
-    //     asm (
-    //         "EE.VLDBC.8 q7, %[nl]" "\n"
-    //         "EE.ZERO.Q q6"
-    //         : "=m" (dummy)
-    //         : [nl] "r" (&NL), "m" (NL), "m" (*(const char(*)[maxLen])str)
-    //     );
-        
-    //     const char* end = str + maxLen;
-    //     if(end < str) {
-    //         end = (const char*)-1;
-    //         maxLen = end-str;
-    //     }
-
-    //     uint32_t tmp = ((maxLen+15)/16);
-    //     asm (
-    //         "EE.LD.128.USAR.IP q0, %[str], 16" "\n"
-    //         "EE.VLD.128.IP q1, %[str], 16" "\n"
-    //         "EE.ZERO.ACCX" "\n"
-
-    //         "EE.SRC.Q.QUP q2, q0, q1" "\n"
-
-    //         "LOOPNEZ %[tmp], .Lend_%=" "\n"
-
-    //             "EE.VCMP.EQ.S8 q5, q2, q6" "\n" // == 0?
-    //             "EE.VMULAS.S8.ACCX.LD.IP q1, %[str], 16, q5, q5" "\n"
-
-    //             "EE.VCMP.EQ.S8 q5, q2, q7" "\n" // == nl?
-    //             "EE.VMULAS.S8.ACCX q5, q5" "\n"
-
-    //             "EE.SRC.Q.QUP q2, q0, q1" "\n"
-
-    //             "RUR.ACCX_0 %[tmp]" "\n"
-    //             "BNEZ %[tmp], .Lfound_%=" "\n"
-
-    //         ".Lend_%=:"
-    //             "ADDI %[str], %[end], (3*16)" "\n" // Make str point to end
-    //         ".Lfound_%=:"
-    //             "ADDI %[str], %[str], -(3*16)" "\n"
-    //         : "+m" (dummy), 
-    //           [str] "+r" (str),
-    //           [tmp] "+r" (tmp)
-    //         : [end] "r" (end)
-    //     );
-
-    //     if(str < end) {
-    //         asm (
-    //             "LOOPNEZ %[cnt], .Lend_%=" "\n"
-    //                 "L8UI %[tmp], %[str], 0" "\n"
-    //                 "ADDI %[str], %[str], 1" "\n"
-    //                 "BEQI %[tmp], %[nl], .Lfound_%=" "\n"
-    //                 "BEQZ %[tmp], .Lfound_%=" "\n"
-    //             ".Lend_%=:" "\n"
-    //             // "ADDI %[str], %[str], 1" "\n"
-    //             ".Lfound_%=:" "\n"
-    //             // "ADDI %[str], %[str], -1" "\n"
-    //             : [str] "+r" (str), [tmp] "=r" (tmp)
-    //             : [nl] "n" ('\n'), [cnt] "r" (end-str)
-    //         );
-    //         str -= 1;
-    //     }
-    // }
-    // return const_cast<char*>(str);
 }

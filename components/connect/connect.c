@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdatomic.h>
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -52,9 +53,9 @@
 
 static const char * TAG = "connect";
 
-static bool is_scanning = false;
-static uint16_t ap_number = 0;
-static wifi_ap_record_t ap_info[MAX_AP_COUNT];
+static _Atomic bool is_scanning = false;
+// static uint16_t ap_number = 0;
+// static wifi_ap_record_t ap_info[MAX_AP_COUNT];
 static int s_retry_num = 0;
 static int clients_connected_to_ap = 0;
 
@@ -75,64 +76,101 @@ esp_err_t get_wifi_current_rssi(int8_t *rssi)
     return err;
 }
 
+static esp_err_t getNextAp(wifi_ap_record_simple_t* const out_ap) {
+    memset(out_ap, 0, sizeof(*out_ap));
+
+    wifi_ap_record_t aprec;
+    const esp_err_t err = esp_wifi_scan_get_ap_record(&aprec);
+
+    if(err == ESP_OK) {
+        memcpy(out_ap->ssid, aprec.ssid, sizeof(out_ap->ssid));
+        out_ap->rssi = aprec.rssi;
+        out_ap->authmode = aprec.authmode;
+    }
+
+    return err;
+
+}
+
 // Function to scan for available WiFi networks
 esp_err_t wifi_scan(wifi_ap_record_simple_t *ap_records, uint16_t *ap_count)
 {
-    if (is_scanning) {
+    
+    if (atomic_exchange(&is_scanning, true)) {
         ESP_LOGW(TAG, "Scan already in progress");
         return ESP_ERR_INVALID_STATE;
     }
 
     ESP_LOGI(TAG, "Starting Wi-Fi scan!");
-    is_scanning = true;
 
-    wifi_ap_record_t current_ap_info;
-    if (esp_wifi_sta_get_ap_info(&current_ap_info) != ESP_OK) {
-        ESP_LOGI(TAG, "Forcing disconnect so that we can scan!");
-        esp_wifi_disconnect();
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    {
+        wifi_ap_record_t current_ap_info;
+        if (esp_wifi_sta_get_ap_info(&current_ap_info) != ESP_OK) {
+            ESP_LOGI(TAG, "Forcing disconnect so that we can scan!");
+            esp_wifi_disconnect();
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
     }
 
-     wifi_scan_config_t scan_config = {
+
+     static const wifi_scan_config_t scan_config = {
         .ssid = 0,
         .bssid = 0,
         .channel = 0,
-        .show_hidden = false
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time = { .active = {.min = 100, .max = 1000},
+                       .passive = 0
+                    },
+        .home_chan_dwell_time = 0,
+        .channel_bitmap = { .ghz_2_channels = -1, .ghz_5_channels = -1 }
     };
 
-    esp_err_t err = esp_wifi_scan_start(&scan_config, false);
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+
     if (err != ESP_OK) {
+        atomic_store(&is_scanning,false);
         ESP_LOGE(TAG, "Wi-Fi scan start failed with error: %s", esp_err_to_name(err));
-        is_scanning = false;
         return err;
     }
 
-    uint16_t retries_remaining = 10;
-    while (is_scanning) {
-        retries_remaining--;
-        if (retries_remaining == 0) {
-            is_scanning = false;
-            return ESP_FAIL;
+    uint16_t aps_found = 0;
+    err = esp_wifi_scan_get_ap_num(&aps_found);
+    if(err != ESP_OK) {
+        atomic_store(&is_scanning,false);
+        ESP_LOGI(TAG, "Failed to get WiFi scan result.");
+        return err;
+    }
+
+    ESP_LOGI(TAG, "%" PRIu16 " Wi-Fi networks found.", aps_found);
+
+    if(ap_records) {
+        unsigned cnt = *ap_count < aps_found ? *ap_count : aps_found;
+        while((cnt != 0) && (getNextAp(ap_records) == ESP_OK)) {
+            ap_records += 1;
+            cnt -= 1;
         }
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 
-    ESP_LOGD(TAG, "Wi-Fi networks found: %d", ap_number);
-    if (ap_number == 0) {
-        ESP_LOGW(TAG, "No Wi-Fi networks found");
-    }
+    *ap_count = aps_found;
 
-    *ap_count = ap_number;
-    memset(ap_records, 0, (*ap_count) * sizeof(wifi_ap_record_simple_t));
-    for (int i = 0; i < ap_number; i++) {
-        memcpy(ap_records[i].ssid, ap_info[i].ssid, sizeof(ap_records[i].ssid));
-        ap_records[i].rssi = ap_info[i].rssi;
-        ap_records[i].authmode = ap_info[i].authmode;
-    }
+    esp_wifi_clear_ap_list();
 
-    ESP_LOGD(TAG, "Finished Wi-Fi scan!");
+    atomic_store(&is_scanning,false);    
 
-    return ESP_OK;
+    return err;
+    // const unsigned cnt = ap_number < *ap_count ? ap_number : *ap_count;
+    // *ap_count = ap_number;
+    // memset(ap_records, 0, (cnt) * sizeof(wifi_ap_record_simple_t));
+    // for (int i = 0; i < cnt; i++) {
+    //     memcpy(ap_records[i].ssid, ap_info[i].ssid, sizeof(ap_records[i].ssid));
+    //     ap_records[i].rssi = ap_info[i].rssi;
+    //     ap_records[i].authmode = ap_info[i].authmode;
+    // }
+
+    // ESP_LOGD(TAG, "Finished Wi-Fi scan!");
+
+    // return ESP_OK;
 }
 
 static void event_handler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data)
@@ -140,19 +178,20 @@ static void event_handler(void * arg, esp_event_base_t event_base, int32_t event
     GlobalState *GLOBAL_STATE = (GlobalState *)arg;
     if (event_base == WIFI_EVENT)
     {
-        if (event_id == WIFI_EVENT_SCAN_DONE) {
-            esp_wifi_scan_get_ap_num(&ap_number);
-            ESP_LOGI(TAG, "Wi-Fi Scan Done");
-            if (esp_wifi_scan_get_ap_records(&ap_number, ap_info) != ESP_OK) {
-                ESP_LOGI(TAG, "Failed esp_wifi_scan_get_ap_records");
-            }
-            is_scanning = false;
-        }
+        // if (event_id == WIFI_EVENT_SCAN_DONE) {
+        //     esp_wifi_scan_get_ap_num(&ap_number);
+        //     ESP_LOGI(TAG, "Wi-Fi Scan Done");
+        //     if (esp_wifi_scan_get_ap_records(&ap_number, ap_info) != ESP_OK) {
+        //         ESP_LOGI(TAG, "Failed esp_wifi_scan_get_ap_records");
+        //     }
+        //     // is_scanning = false;
+        //     atomic_
+        // }
 
-        if (is_scanning) {
-            ESP_LOGI(TAG, "Still scanning, ignore wifi event.");
-            return;
-        }
+        // if (is_scanning) {
+        //     ESP_LOGI(TAG, "Still scanning, ignore wifi event.");
+        //     return;
+        // }
 
         if (event_id == WIFI_EVENT_STA_START) {
             ESP_LOGI(TAG, "Connecting...");

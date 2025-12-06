@@ -4,6 +4,8 @@ import { delay, Observable, of } from 'rxjs';
 import { ISystemInfo } from 'src/models/ISystemInfo';
 import { ISystemStatistics } from 'src/models/ISystemStatistics';
 import { ISystemASIC } from 'src/models/ISystemASIC';
+import { ISystemStatisticsDash } from 'src/models/ISystemStatisticsDash';
+import { ISystemInfoDash } from 'src/models/ISystemInfoDash';
 
 import { environment } from '../../environments/environment';
 
@@ -15,6 +17,41 @@ export class SystemService {
   constructor(
     private httpClient: HttpClient
   ) { }
+
+  public getDashInfo(uri: string = ''): Observable<ISystemInfoDash> {
+    // if(environment.production) {
+      return this.httpClient.get(`${uri}/api/system/info/dash`) as Observable<ISystemInfoDash>;
+    // }
+    //  else {
+    //   // Mock data for development
+    //   return of(
+    //     {
+    //       currentTimestamp: 12345,
+    //       statistics : [
+    //         [475.25, 44.9, 13.45, 12000],
+    //         [470.7, 48.2, 14.1, 12100],
+    //       ]
+    //     }
+    //   ).pipe(delay(1000));
+    // }
+  }
+
+  public getDashStats(uri: string = ''): Observable<ISystemStatisticsDash> {
+    if(environment.production) {
+      return this.httpClient.get(`${uri}/api/system/statistics/dashboard`) as Observable<ISystemStatisticsDash>;
+    } else {
+      // Mock data for development
+      return of(
+        {
+          currentTimestamp: 12345,
+          statistics : [
+            [475.25, 44.9, 13.45, 12000],
+            [470.7, 48.2, 14.1, 12100],
+          ]
+        }
+      ).pipe(delay(1000));
+    }
+  }
 
   public getInfo(uri: string = ''): Observable<ISystemInfo> {
     if (environment.production) {
@@ -36,6 +73,10 @@ export class SystemService {
         expectedHashrate: 420,
         bestDiff: "0",
         bestSessionDiff: "0",
+        heapInfo : [
+          {name: "internal", size: 333000, free: 111000, minFree : 100000, used : 222000, usedPercent : 66},
+          {name: "psram", size: 8000000, free: 7000000, minFree : 100000, used : 1000000, usedPercent : 13}
+        ],
         freeHeap: 200504,
         coreVoltage: 1200,
         coreVoltageActual: 1200,
@@ -97,6 +138,7 @@ export class SystemService {
     // Mock data for development
     return of({
       currentTimestamp: 61125,
+      labels: ["hashRate","temp","vrTemp","power","voltage","current","coreVoltageActual","fanspeed","fanrpm","wifiRSSI","freeHeap","timestamp"],
       statistics: [
         [0,-1,14.45068359375,13131],
         [413.4903744405481,58.5,14.86083984375,18126],

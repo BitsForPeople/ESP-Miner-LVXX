@@ -6,7 +6,7 @@
         text="Device has overheated - See settings">
     </p-message>
 
-    <p-message *ngIf="!info.frequency || info.frequency < 400" severity="warn" styleClass="w-full mb-4 py-4 border-round-xl"
+    <p-message *ngIf="!info.frequency || info.frequency < 100" severity="warn" styleClass="w-full mb-4 py-4 border-round-xl"
         text="Device frequency is set low - See settings">
     </p-message>
 

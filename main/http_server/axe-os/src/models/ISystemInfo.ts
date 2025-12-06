@@ -3,6 +3,15 @@ interface ISharesRejectedStat {
     count: number;
 }
 
+interface IHeapInfo {
+    name : string;
+    size : number;
+    free : number;
+    minFree : number;
+    used : number;
+    usedPercent : number;
+}
+
 export interface ISystemInfo {
     display: string;
     rotation: number;
@@ -20,6 +29,7 @@ export interface ISystemInfo {
     expectedHashrate: number,
     bestDiff: string,
     bestSessionDiff: string,
+    heapInfo: IHeapInfo[],
     freeHeap: number,
     coreVoltage: number,
     hostname: string,

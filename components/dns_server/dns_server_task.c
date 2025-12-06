@@ -228,10 +228,10 @@ void dns_server_task(void * pvParameters)
 
         int sock = socket(addr_family, SOCK_DGRAM, ip_protocol);
         if (sock < 0) {
-            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            ESP_LOGW(TAG, "Unable to create socket: errno %d", errno);
             break;
         }
-        ESP_LOGI(TAG, "Socket created");
+        ESP_LOGD(TAG, "Socket created");
 
         if(!dns_server_xch_sock(inst,prevSock,sock)) {
             shutdown(sock, 0);
@@ -242,9 +242,9 @@ void dns_server_task(void * pvParameters)
 
         int err = bind(sock, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
         if (err < 0) {
-            ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
+            ESP_LOGW(TAG, "Socket unable to bind: errno %d", errno);
         }
-        ESP_LOGI(TAG, "Socket bound, port %d", DNS_PORT);
+        ESP_LOGD(TAG, "Socket bound, port %d", DNS_PORT);
 
         while (!dns_server_is_stop_requested(inst)) {
             ESP_LOGI(TAG, "Waiting for data");
@@ -255,7 +255,7 @@ void dns_server_task(void * pvParameters)
             // Error occurred during receiving
             if (len < 0) {
                 if(!dns_server_is_stop_requested(inst)) {
-                    ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+                    ESP_LOGW(TAG, "recvfrom failed: errno %d", errno);
                 }
                 close(sock);
                 break;
@@ -289,12 +289,12 @@ void dns_server_task(void * pvParameters)
         }
 
         if (sock != -1) {
-            ESP_LOGI(TAG, "Shutting down socket");
+            ESP_LOGD(TAG, "Shutting down socket");
             shutdown(sock, 0);
             close(sock);
         }
     }
-    ESP_LOGI(TAG, "DNS server task exiting.");
+    ESP_LOGD(TAG, "DNS server task exiting.");
 
     dns_server_notify_stopped(inst);
     vTaskDelete(NULL);

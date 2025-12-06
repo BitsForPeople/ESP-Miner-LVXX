@@ -22,7 +22,7 @@
 
 #include "cjson_helper.h"
 
-static GlobalState GLOBAL_STATE;
+GlobalState GLOBAL_STATE;
 
 static const char * const TAG = "bitaxe";
 

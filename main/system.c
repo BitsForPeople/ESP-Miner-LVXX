@@ -229,14 +229,19 @@ void SYSTEM_notify_found_nonce(GlobalState * GLOBAL_STATE, double found_diff, ui
 
 static double _calculate_network_difficulty(uint32_t nBits)
 {
+    static const double D1 = ldexp(65535,208);
+
     uint32_t mantissa = nBits & 0x007fffff;  // Extract the mantissa from nBits
-    uint8_t exponent = (nBits >> 24) & 0xff; // Extract the exponent from nBits
+    int exponent = (nBits >> 24) & 0xff; // Extract the exponent from nBits
 
-    double target = (double) mantissa * pow(256, (exponent - 3)); // Calculate the target value
+    double target = ldexp((double)mantissa,8*(exponent-3)); // target = mantissa * 256^(exponent-3)
 
-    double difficulty = (pow(2, 208) * 65535) / target; // Calculate the difficulty
+    // double target = (double) mantissa * pow(256, (exponent - 3)); // Calculate the target value
 
-    return difficulty;
+    // double difficulty = (pow(2, 208) * 65535) / target; // Calculate the difficulty
+
+    // return difficulty;
+    return D1 / target;
 }
 
 static void _check_for_best_diff(GlobalState * GLOBAL_STATE, double diff, uint8_t job_id)
@@ -278,33 +283,39 @@ static void _suffix_string(uint64_t val, char * buf, size_t bufsiz, int sigdigit
     const uint64_t tera = 1000000000000ull;
     const uint64_t peta = 1000000000000000ull;
     const uint64_t exa = 1000000000000000000ull;
-    char suffix[2] = "";
+    char suffix[2] = {'\0','\0'};
     bool decimal = true;
     double dval;
 
     if (val >= exa) {
         val /= peta;
         dval = (double) val / dkilo;
-        strcpy(suffix, "E");
+        // strcpy(suffix, "E");
+        suffix[0] = 'E';
     } else if (val >= peta) {
         val /= tera;
         dval = (double) val / dkilo;
-        strcpy(suffix, "P");
+        // strcpy(suffix, "P");
+        suffix[0] = 'P';
     } else if (val >= tera) {
         val /= giga;
         dval = (double) val / dkilo;
-        strcpy(suffix, "T");
+        // strcpy(suffix, "T");
+        suffix[0] = 'T';
     } else if (val >= giga) {
         val /= mega;
         dval = (double) val / dkilo;
-        strcpy(suffix, "G");
+        // strcpy(suffix, "G");
+        suffix[0] = 'G';
     } else if (val >= mega) {
         val /= kilo;
         dval = (double) val / dkilo;
-        strcpy(suffix, "M");
+        // strcpy(suffix, "M");
+        suffix[0] = 'M';
     } else if (val >= kilo) {
         dval = (double) val / dkilo;
-        strcpy(suffix, "k");
+        // strcpy(suffix, "k");
+        suffix[0] = 'k';
     } else {
         dval = val;
         decimal = false;

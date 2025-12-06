@@ -305,31 +305,30 @@ typedef struct NBits {
     };
 } NBits_t;
 
-static void normalize(NBits_t* nb) {
-    uint32_t m = nb->m;
+static NBits_t normalized(NBits_t nb) {
+    const uint32_t m = nb.m;
     if(m != 0) {
         const unsigned zerobytes = (__builtin_clz(m) / 8) - 1;
         if(zerobytes != 0) {
-            const unsigned e = nb->e;    
+            const unsigned e = nb.e;    
             if(e != 0) {    
                 const unsigned s = (e < zerobytes) ? e : zerobytes;
-                nb->m = m << (s*8);
-                nb->e = e - s;
+                nb.m = m << (s*8);
+                nb.e = e - s;
             }
         }
     }
+    return nb;
 }
 
 int mining_compare_nbits(const uint32_t nb_a, const uint32_t nb_b) {
     NBits_t a = {.u32 = nb_a};
     NBits_t b = {.u32 = nb_b};
-    normalize(&a);
-    normalize(&b);
-    int c = a.e;
-    c -= b.e;
+    a = normalized(a);
+    b = normalized(b);
+    int c = a.e - b.e;
     if(c==0) {
-        c = a.m;
-        c -= b.m;
+        c = a.m - b.m;
     }
     c = (c < -1) ? -1 : c;
     c = (1 < c) ? 1 : c;
@@ -348,20 +347,26 @@ uint32_t mining_get_hash_nbits(const Hash_t* const hash) {
         ptr -= 1;
     }
     if(u32 != 0) {
-        uint32_t bytecnt = __builtin_clz(u32) / 8;
+        uint32_t zerobytes = __builtin_clz(u32) / 8;
 
-        if(bytecnt == 0) {
+        // For the mantissa, we want 24 bits, i.e. 1 byte of leading 0s
+        if(zerobytes == 0) {
             u32 = u32 >> 8;
         } else 
-        if(bytecnt >= 2) {
-            u32 = u32 << ((bytecnt-1) * 8);
+        if(zerobytes >= 2) {
+            const unsigned s = ((zerobytes-1) * 8);
+            u32 = u32 << s;
+            if(ptr >= h) {
+                // Fill lower bits from next word of the hash, if there is one. 
+                u32 = u32 | (*ptr >> (sizeof(*ptr)-s));
+            }
         }
         if(u32 & (1u<<23)) {
             // Bitcoin Core doesn't like the mantissa with MSB set, so:
             u32 = u32 >> 8;
-            bytecnt -= 1;
+            exp += 1;
         }
-        exp -= bytecnt;
+        exp -= zerobytes;
     }
 
     return (exp << 24) | u32;

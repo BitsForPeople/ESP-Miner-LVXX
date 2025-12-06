@@ -8,8 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "tasks_events.h"
-#include "mn_exchange.h"
+#include "asic_task_intf.h"
 #include "bm_job_builder.h"
 #include "bm_job_pool.h"
 
@@ -82,11 +81,38 @@ static TickType_t get_ticks_left(const TickType_t tStart, const TickType_t max_w
 
 
 
-static const EventBits_t EVENTS = TASKS_EVENTS_STRATUM_EVENTS;
+static const EventBits_t EVENTS = ASIC_TASK_EVENT_STRATUM_EVENTS;
 
 static inline EventBits_t event_wait(TickType_t maxWait) {
-    return tasks_events_wait(EVENTS, true, maxWait);
+    return xEventGroupWaitBits(asic_task_event_handle,EVENTS,true,false,maxWait);
 }
+
+static inline bool event_is_abandon_work(const EventBits_t bits) {
+    return (bits & ASIC_TASK_EVENT_STRATUM_ABANDON_WORK) != 0;
+}
+
+static inline EventBits_t ack_abandon_work(void) {
+    return xEventGroupSetBits( asic_task_event_handle, ASIC_TASK_EVENT_STRATUM_WORK_ABANDONED);
+}
+
+static inline bool event_is_new_work(EventBits_t bits) {
+    return (bits & ASIC_TASK_EVENT_STRATUM_NEW_WORK) != 0;
+}
+
+static inline bool event_is_diff_change(EventBits_t bits) {
+    return (bits & ASIC_TASK_EVENT_POOL_DIFF_CHANGED) != 0;
+}
+
+static inline bool event_is_version_change(EventBits_t bits) {
+    return (bits & ASIC_TASK_EVENT_VERSION_MASK_CHANGED) != 0;
+}
+
+static inline mining_notify* take_work(void) {
+    return atomic_exchange(&asic_task_mining_notify,NULL);
+}
+
+
+
 
 static inline void release_mining_notify(mining_notify* const mining_notification) {
     if(mining_notification != NULL) {
@@ -149,9 +175,9 @@ void ASIC_task(void *pvParameters)
                 get_ticks_left(last_job_time,job_freq_ticks)
         );
 
-        if(event_is_stratum_abandon_work(evt)) {
+        if(event_is_abandon_work(evt)) {
             // Acknowledge that we got the memo and are in the appropriate branch of execution now.
-            tasks_events_set_bits(TASKS_EVENTS_STRATUM_WORK_ABANDONED);
+            ack_abandon_work();
 
             ESP_LOGI(TAG, "Abandoning work.");
 
@@ -161,7 +187,7 @@ void ASIC_task(void *pvParameters)
 
             invalidate_all_jobs(GLOBAL_STATE);
 
-            // The next job should start immediately when we get new work. So pretend the last job was sent a full interval.
+            // The next job should start immediately when we get new work. So pretend the last job was sent a full interval ago.
             last_job_time = xTaskGetTickCount() - job_freq_ticks;
         }
         if(event_is_version_change(evt)) {
@@ -171,7 +197,7 @@ void ASIC_task(void *pvParameters)
         if(event_is_diff_change(evt)) {
             // Ok...
         }
-        if(event_is_stratum_new_work(evt)) {
+        if(event_is_new_work(evt)) {
             ESP_LOGI(TAG, "Getting new work.");
 
             // Discontinue working with this notification.
@@ -179,7 +205,7 @@ void ASIC_task(void *pvParameters)
             mining_notification = NULL;
             
             extranonce_2 = 0;
-            mining_notification = shared_mn_xch(NULL);
+            mining_notification = take_work();
         }
 
         if(mining_notification != NULL) {

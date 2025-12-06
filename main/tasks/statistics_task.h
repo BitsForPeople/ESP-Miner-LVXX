@@ -2,6 +2,9 @@
 #define STATISTICS_TASK_H_
 
 #include "global_state.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef struct StatisticsData * StatisticsNodePtr;
 typedef struct StatisticsData * StatisticsNextNodePtr;
@@ -52,6 +55,11 @@ void statistics_deinit(void);
 bool statistics_set_collection_interval(const uint16_t intervalSeconds);
 
 bool statisticDataNext(StatisticsNodePtr prevNode, StatisticsNodePtr dataOut);
+
+
+#ifdef __cplusplus
+}
+#endif
 
 
 #endif // STATISTICS_TASK_H_
