@@ -8,7 +8,7 @@ esp_err_t http_json_write_stats(http_writer_t* const pw, const struct Statistics
 
     const struct StatisticsData& statsData = *stats;
     w.startArr()
-        .writeValue(statsData.hashrate_MHz / 1000.f)
+        .writeValue(statsData.hashrate_MHz * 0.001f)
         .writeValue(statsData.chipTemperature)
         .writeValue(statsData.vrTemperature)
         .writeValue(statsData.power)
@@ -22,21 +22,6 @@ esp_err_t http_json_write_stats(http_writer_t* const pw, const struct Statistics
         .writeValue(statsData.timestamp)
     .endArr();
     return w;
-
-    // return w.writeArr(
-    //     statsData.hashrate_MHz / 1000.f,
-    //     statsData.chipTemperature,
-    //     statsData.vrTemperature,    
-    //     statsData.power,
-    //     statsData.voltage,
-    //     statsData.current,
-    //     statsData.coreVoltageActual,
-    //     statsData.fanSpeed,
-    //     statsData.fanRPM,
-    //     statsData.wifiRSSI,
-    //     statsData.freeHeap,
-    //     statsData.timestamp
-    // );
 }
 
 esp_err_t http_json_start_obj(http_writer_t* const w, const char* const name) {

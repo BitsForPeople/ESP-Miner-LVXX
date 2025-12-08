@@ -55,12 +55,33 @@
 static const char * const TAG = "http_server";
 static const char * const CORS_TAG = "CORS";
 
+static const esp_vfs_spiffs_conf_t SPIFFS_CONF = {.base_path = "", .partition_label = NULL, .max_files = 5, .format_if_mount_failed = false};
+
+
+typedef struct MimeMapping {
+    const char* ext;
+    const char* type;
+} MimeMapping_t;
+
+static const MimeMapping_t MIMES[] = {
+    {.ext = "html", .type = "text/html"},
+    {.ext = "js"  , .type = "application/javascript"},
+    {.ext = "css",  .type = "text/css"},
+    {.ext = "png",  .type = "image/png"},
+    {.ext = "ico",  .type = "image/x-icon"},
+    {.ext = "svg",  .type = "image/svg+xml"},
+    {.ext = "pdf",  .type = "application/pdf"},
+    {.ext = "woff2", .type = "font/woff2"},
+    {.ext = "html", .type = "text/html"}
+};
+
+static const unsigned NUM_MIMES = sizeof(MIMES) / sizeof(MIMES[0]);
+
+
 static char axeOSVersion[32];
 
-// static GlobalState * GLOBAL_STATE;
 static httpd_handle_t server = NULL;
 
-// static WifiEventListenerCtx_t evtCtx;
 
 static inline void* allocPrefPSRAM(size_t sz) {
     void* m = heap_caps_malloc(sz, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -126,7 +147,7 @@ static esp_err_t GET_wifi_scan(httpd_req_t *req)
 
 typedef struct rest_server_context
 {
-    char base_path[ESP_VFS_PATH_MAX + 1];
+    // char base_path[ESP_VFS_PATH_MAX + 1];
     char scratch[SCRATCH_BUFSIZE];
 } rest_server_context_t;
 
@@ -254,10 +275,10 @@ static void readAxeOSVersion(void) {
     }
 }
 
+
 esp_err_t init_fs(void)
 {
-    esp_vfs_spiffs_conf_t conf = {.base_path = "", .partition_label = NULL, .max_files = 5, .format_if_mount_failed = false};
-    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    esp_err_t ret = esp_vfs_spiffs_register(&SPIFFS_CONF);
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
@@ -292,25 +313,6 @@ void stop_webserver(httpd_handle_t server)
     }
 }
 
-typedef struct MimeMapping {
-    const char* ext;
-    const char* type;
-} MimeMapping_t;
-
-static const MimeMapping_t MIMES[] = {
-    {.ext = "html", .type = "text/html"},
-    {.ext = "js"  , .type = "application/javascript"},
-    {.ext = "css",  .type = "text/css"},
-    {.ext = "png",  .type = "image/png"},
-    {.ext = "ico",  .type = "image/x-icon"},
-    {.ext = "svg",  .type = "image/svg+xml"},
-    {.ext = "pdf",  .type = "application/pdf"},
-    {.ext = "woff2", .type = "font/woff2"},
-    {.ext = "html", .type = "text/html"}
-};
-
-static const unsigned NUM_MIMES = sizeof(MIMES) / sizeof(MIMES[0]);
-
 /* Set HTTP response content type according to file extension */
 static esp_err_t set_content_type_from_file(httpd_req_t * req, const char * filepath)
 {
@@ -326,23 +328,6 @@ static esp_err_t set_content_type_from_file(httpd_req_t * req, const char * file
                     break;
                 }
             }
-            // if (strcasecmp(ext,".html") == 0) {
-            //     type = "text/html";
-            // } else if (CHECK_FILE_EXTENSION(filepath, ".js")) {
-            //     type = "application/javascript";
-            // } else if (CHECK_FILE_EXTENSION(filepath, ".css")) {
-            //     type = "text/css";
-            // } else if (CHECK_FILE_EXTENSION(filepath, ".png")) {
-            //     type = "image/png";
-            // } else if (CHECK_FILE_EXTENSION(filepath, ".ico")) {
-            //     type = "image/x-icon";
-            // } else if (CHECK_FILE_EXTENSION(filepath, ".svg")) {
-            //     type = "image/svg+xml";
-            // } else if (CHECK_FILE_EXTENSION(filepath, ".pdf")) {
-            //     type = "application/pdf";
-            // } else if (CHECK_FILE_EXTENSION(filepath, ".woff2")) {
-            //     type = "font/woff2";
-            // }
         }
     }
     return httpd_resp_set_type(req, type);
@@ -440,15 +425,22 @@ static esp_err_t file_serve_handler(httpd_req_t * req)
     filepath[MAX_FP] = '\0';
 
     // Build the file path to use from the base_path + the requested path (+ "index.html")
-    rest_server_context_t * rest_context = (rest_server_context_t *) req->user_ctx;
+    rest_server_context_t* const rest_context = (rest_server_context_t *) req->user_ctx;
 
-    size_t fplen = strlcpy(filepath, rest_context->base_path, MAX_FP);
-    fplen += strlcpy(filepath + fplen, req->uri, MAX_FP - fplen);
+    size_t fplen = 0;
+    if(SPIFFS_CONF.base_path[0] != '\0') {
+        fplen = strlcpy(filepath, SPIFFS_CONF.base_path, MAX_FP);
+    }
+    if(fplen < MAX_FP) {
+        fplen += strlcpy(filepath + fplen, req->uri, MAX_FP - fplen);
+    }
 
     if(fplen >= MAX_FP) {
         return redirectToRoot(req);
     }
-    const bool uri_is_dir = req->uri[strlen(req->uri) - 1] == '/';
+
+    const bool uri_is_dir = filepath[fplen-1] == '/';
+    //req->uri[strlen(req->uri) - 1] == '/';
     if (uri_is_dir) {
         fplen += strlcpy(filepath + fplen, "index.html", MAX_FP - fplen);
         // strlcat(filepath, "/index.html", filePathLength);
@@ -478,15 +470,6 @@ static esp_err_t file_serve_handler(httpd_req_t * req)
     if (fd == -1) {
         ESP_LOGI(TAG, "File not found: \"%s\"",filepath);
         return redirectToRoot(req);
-        // // Set status
-        // httpd_resp_set_status(req, "302 Temporary Redirect");
-        // // Redirect to the "/" root directory
-        // httpd_resp_set_hdr(req, "Location", "/");
-        // // iOS requires content in the response to detect a captive portal, simply redirecting is not sufficient.
-        // httpd_resp_send(req, "Redirect to the captive portal", HTTPD_RESP_USE_STRLEN);
-
-        // ESP_LOGI(TAG, "Redirecting to root");
-        // return ESP_OK;
     }
 
     if (!uri_is_dir) {
@@ -517,8 +500,7 @@ static esp_err_t file_serve_handler(httpd_req_t * req)
     } while (read_bytes > 0);
     /* Close file after sending complete */
     close(fd);
-    // ESP_LOGI(TAG, "File sending complete");
-    /* Respond with an empty chunk to signal HTTP response completion */
+
     return httpd_resp_send_chunk(req, NULL, 0);
 }
 
@@ -1220,8 +1202,6 @@ esp_err_t http_404_error_handler(httpd_req_t * req, httpd_err_code_t err)
 
 esp_err_t start_rest_server(void * pvParameters)
 {
-    const char * base_path = "";
-
     bool enter_recovery = false;
     if (init_fs() != ESP_OK) {
         // Unable to initialize the web app filesystem.
@@ -1229,11 +1209,9 @@ esp_err_t start_rest_server(void * pvParameters)
         enter_recovery = true;
     }
 
-    REST_CHECK(base_path, "wrong base path", err);
     rest_server_context_t* rest_context = (rest_server_context_t*)allocPrefPSRAM(sizeof(rest_server_context_t));
 
     REST_CHECK(rest_context, "No memory for rest context", err);
-    strlcpy(rest_context->base_path, base_path, sizeof(rest_context->base_path));
 
     {
         httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -1425,8 +1403,7 @@ esp_err_t start_rest_server(void * pvParameters)
 
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_error_handler);
 
-    // Start websocket log handler thread
-    xTaskCreate(websocket_task, "websocket_task", 4096, server, 2, NULL);
+    websocket_task_start(server);
 
     {
         // Start the DNS server that will redirect all queries to the softAP IP

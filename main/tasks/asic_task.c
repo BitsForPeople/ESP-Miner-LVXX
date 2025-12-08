@@ -4,6 +4,7 @@
 #include "serial.h"
 #include <string.h>
 #include "esp_log.h"
+#include "esp_random.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -160,8 +161,10 @@ void ASIC_task(void *pvParameters)
     mining_notify* mining_notification = NULL;
     uint64_t extranonce_2 = 0;
 
+    uint32_t rnd = esp_random();
     while (1)
     {
+        rnd += esp_random();
         /*
          * As long as we have valid mining_notify data, wake up (at least) at job_freq_ticks
          * intervals to build and send a new job to the ASIC.
@@ -204,7 +207,7 @@ void ASIC_task(void *pvParameters)
             release_mining_notify(mining_notification);
             mining_notification = NULL;
             
-            extranonce_2 = 0;
+            extranonce_2 = rnd;
             mining_notification = take_work();
         }
 
