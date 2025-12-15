@@ -44,8 +44,6 @@ static int current_screen_delay_ms;
 // static int screen_chars;
 static int screen_lines;
 
-// static GlobalState * GLOBAL_STATE;
-
 static lv_obj_t *self_test_message_label;
 static lv_obj_t *self_test_result_label;
 static lv_obj_t *self_test_finished_label;
@@ -416,7 +414,7 @@ static void screen_update_cb(lv_timer_t * timer)
 
     if (current_power != power_management->power || current_hashrate != module->current_hashrate) {
         if (power_management->power > 0 && module->current_hashrate > 0) {
-            float efficiency = power_management->power / (module->current_hashrate / 1000.0);
+            float efficiency = power_management->power / (module->current_hashrate * 0.001f);
             lv_label_set_text_fmt(stats_efficiency_label, "J/Th: %.2f", efficiency);
         }
         current_power = power_management->power;
@@ -555,12 +553,10 @@ static void uptime_update_cb(lv_timer_t * timer)
     }
 }
 
-esp_err_t screen_start(void * pvParameters)
+esp_err_t screen_start(void)
 {
     // screen_chars = lv_display_get_horizontal_resolution(NULL) / 6;
     screen_lines = lv_display_get_vertical_resolution(NULL) / 8;
-
-    // GLOBAL_STATE = (GlobalState *) pvParameters;
 
     if (GLOBAL_STATE.SYSTEM_MODULE.is_screen_active) {
         SystemModule * module = &GLOBAL_STATE.SYSTEM_MODULE;

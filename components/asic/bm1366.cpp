@@ -57,8 +57,10 @@ extern "C" {
         .id = BM1366,
         .name = "BM1366",
         .hashes_per_clock = 894, // small core count
+        .midstate_autogen = true,
         .get_compatibility = BM1366_get_compatibility,
         .init = BM1366_init,
+        .set_diff_mask = BM1366_set_diff_mask,
         .process_work = BM1366_process_work,
         .set_max_baud = BM1366_set_max_baud,
         .send_work = BM1366_send_work,
@@ -415,7 +417,7 @@ static const uint8_t SET_10_HASH_COUNTING[] = {0x00, 0x10, 0x00, 0x00, 0x15, 0x1
 
 
 
-static void sendDiffMask(const uint16_t difficulty) {
+static void sendDiffMask(const uint32_t difficulty) {
     //set difficulty mask
     uint8_t difficulty_mask[6];
     ASIC_get_difficulty_mask(difficulty, difficulty_mask);
@@ -428,6 +430,10 @@ unsigned BM1366_get_compatibility(uint16_t chip_id) {
     } else {
         return 0;
     }
+}
+
+uint32_t BM1366_get_pref_num_midstates(void) {
+    return 0; // Auto Midstate+Version rolling on chip; won't have to provide any midstate.
 }
 
 uint8_t BM1366_init(float frequency, uint16_t asic_count, uint16_t difficulty)
@@ -526,6 +532,10 @@ uint8_t BM1366_init(float frequency, uint16_t asic_count, uint16_t difficulty)
     send(INIT_VER_ROLL);
 
     return chip_counter;
+}
+
+void BM1366_set_diff_mask(uint32_t difficulty) {
+    sendDiffMask(difficulty);
 }
 
 // Baud formula = 25M/((denominator+1)*8)
@@ -689,13 +699,15 @@ void BM1366_send_work(GlobalState* const GLOBAL_STATE, bm_job* const next_bm_job
     GLOBAL_STATE->valid_jobs[newJobId] = 1;
     pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock);
 
-    //debug sent jobs - this can get crazy if the interval is short
-    #if BM1366_DEBUG_JOBS
-    ESP_LOGI(TAG, "Send Job: %02X", newJobId);
-    #endif
+
 
     // _send_BM1366((TYPE_JOB | GROUP_SINGLE | CMD_WRITE), (uint8_t *)&job, sizeof(BM1366_job), BM1366_DEBUG_WORK);
     send(jm.build());
+
+    //debug sent jobs - this can get crazy if the interval is short
+    #if BM1366_DEBUG_JOBS
+    ESP_LOGI(TAG, "Sent job 0x%02" PRIx8, newJobId);
+    #endif
 }
 
 task_result * BM1366_process_work(GlobalState* const GLOBAL_STATE)
@@ -707,6 +719,7 @@ task_result * BM1366_process_work(GlobalState* const GLOBAL_STATE)
     }
 
     uint8_t job_id = asic_result.job_id & 0xf8;
+// ESP_LOGI(TAG, "Got result for job 0x%02" PRIx8, job_id);
     // uint8_t core_id = (uint8_t)((ntohl(asic_result.nonce) >> 25) & 0x7f); // BM1366 has 112 cores, so it should be coded on 7 bits
     // uint8_t small_core_id = asic_result.job_id & 0x07; // BM1366 has 8 small cores, so it should be coded on 3 bits
     uint32_t version_bits = (ntohs(asic_result.version) << 13); // shift the 16 bit value left 13

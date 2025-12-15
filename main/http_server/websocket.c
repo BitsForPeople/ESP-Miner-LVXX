@@ -123,6 +123,11 @@ static int log_to_queue(const char *format, va_list args)
             if(UNLIKELY(len > WS_LOG_BUFFER_SIZE)) {
                 lb = lb + len - WS_LOG_BUFFER_SIZE;
                 len = WS_LOG_BUFFER_SIZE;
+                lb[0] = ' ';
+                lb[1] = '.';
+                lb[2] = '.';
+                lb[3] = '.';
+                lb[4] = ' ';
             }
 
             xRingbufferSend(ringbuf,lb,len,pdMS_TO_TICKS(100));

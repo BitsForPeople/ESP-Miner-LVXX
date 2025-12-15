@@ -37,12 +37,12 @@ static void _suffix_string(uint64_t, char *, size_t, int);
 //local function prototypes
 static esp_err_t ensure_overheat_mode_config();
 
-static void _check_for_best_diff(GlobalState * GLOBAL_STATE, double diff, uint8_t job_id);
+static void _check_for_best_diff(double diff, uint8_t job_id);
 static void _suffix_string(uint64_t val, char * buf, size_t bufsiz, int sigdigits);
 
-void SYSTEM_init_system(GlobalState * GLOBAL_STATE)
+void SYSTEM_init_system(void)
 {
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule * module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     module->duration_start = 0;
     module->historical_hashrate_rolling_index = 0;
@@ -96,33 +96,51 @@ void SYSTEM_init_system(GlobalState * GLOBAL_STATE)
     _suffix_string(module->best_session_nonce_diff, module->best_session_diff_string, DIFF_STRING_SIZE, 0);
 }
 
-esp_err_t SYSTEM_init_peripherals(GlobalState * GLOBAL_STATE) {
+static const gpio_config_t RST_PIN_CFG = {
+    .pin_bit_mask = (1ull << CONFIG_GPIO_ASIC_RESET),
+    .mode = GPIO_MODE_OUTPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE
+};
+
+esp_err_t SYSTEM_init_ctrl_pins(void) {
+    gpio_set_level(CONFIG_GPIO_ASIC_RESET,1);
+    esp_err_t r = gpio_config(&RST_PIN_CFG);
+    ESP_RETURN_ON_ERROR(r, TAG, "Error setting up RST pin.");
+    // For now, the EN pin is set up by vcore module itself.
+    return r;
+}
+
+esp_err_t SYSTEM_init_peripherals(void) {
     
     ESP_RETURN_ON_ERROR(gpio_install_isr_service(0), TAG, "Error installing ISR service");
 
-    // Initialize the core voltage regulator
-    ESP_RETURN_ON_ERROR(VCORE_init(GLOBAL_STATE), TAG, "VCORE init failed!");
-    ESP_RETURN_ON_ERROR(VCORE_set_voltage(GLOBAL_STATE, nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE) / 1000.0), TAG, "VCORE set voltage failed!");
+    SYSTEM_init_ctrl_pins();
 
-    ESP_RETURN_ON_ERROR(Thermal_init(&GLOBAL_STATE->DEVICE_CONFIG), TAG, "Thermal init failed!");
+    // Initialize the core voltage regulator
+    ESP_RETURN_ON_ERROR(VCORE_init(&GLOBAL_STATE), TAG, "VCORE init failed!");
+    ESP_RETURN_ON_ERROR(VCORE_set_voltage(&GLOBAL_STATE, nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE) * 0.001f), TAG, "VCORE set voltage failed!");
+
+    ESP_RETURN_ON_ERROR(Thermal_init(&GLOBAL_STATE.DEVICE_CONFIG), TAG, "Thermal init failed!");
 
     vTaskDelay(500 / portTICK_PERIOD_MS);
 
     // Ensure overheat_mode config exists
     ESP_RETURN_ON_ERROR(ensure_overheat_mode_config(), TAG, "Failed to ensure overheat_mode config");
 
-    ESP_RETURN_ON_ERROR(display_init(GLOBAL_STATE), TAG, "Display init failed!");
+    ESP_RETURN_ON_ERROR(display_init(), TAG, "Display init failed!");
 
     ESP_RETURN_ON_ERROR(input_init(screen_next, toggle_wifi_softap), TAG, "Input init failed!");
 
-    ESP_RETURN_ON_ERROR(screen_start(GLOBAL_STATE), TAG, "Screen start failed!");
+    ESP_RETURN_ON_ERROR(screen_start(), TAG, "Screen start failed!");
 
     return ESP_OK;
 }
 
-void SYSTEM_notify_accepted_share(GlobalState * GLOBAL_STATE)
+void SYSTEM_notify_accepted_share(void)
 {
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule* const module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     module->shares_accepted++;
 }
@@ -133,9 +151,9 @@ static int compare_rejected_reason_stats(const void *a, const void *b) {
     return (eb->count > ea->count) - (ea->count > eb->count);
 }
 
-void SYSTEM_notify_rejected_share(GlobalState * GLOBAL_STATE, char * error_msg)
+void SYSTEM_notify_rejected_share(char * error_msg)
 {
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule* const module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     module->shares_rejected++;
 
@@ -161,16 +179,16 @@ void SYSTEM_notify_rejected_share(GlobalState * GLOBAL_STATE, char * error_msg)
     }    
 }
 
-void SYSTEM_notify_mining_started(GlobalState * GLOBAL_STATE)
+void SYSTEM_notify_mining_started(void)
 {
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule * const module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     module->duration_start = esp_timer_get_time();
 }
 
-void SYSTEM_notify_new_ntime(GlobalState * GLOBAL_STATE, uint32_t ntime)
+void SYSTEM_notify_new_ntime(uint32_t ntime)
 {
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule* const module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     // Hourly clock sync
     if (module->lastClockSync + (60 * 60) > ntime) {
@@ -184,14 +202,14 @@ void SYSTEM_notify_new_ntime(GlobalState * GLOBAL_STATE, uint32_t ntime)
     settimeofday(&tv, NULL);
 }
 
-void SYSTEM_notify_found_nonce(GlobalState * GLOBAL_STATE, double found_diff, uint8_t job_id)
+void SYSTEM_notify_found_nonce(double found_diff, uint8_t job_id)
 {
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule* const module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     // Calculate the time difference in seconds with sub-second precision
     // hashrate = (nonce_difficulty * 2^32) / time_to_find
 
-    module->historical_hashrate[module->historical_hashrate_rolling_index] = GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty;
+    module->historical_hashrate[module->historical_hashrate_rolling_index] = GLOBAL_STATE.DEVICE_CONFIG.family.asic.difficulty;
     module->historical_hashrate_time_stamps[module->historical_hashrate_rolling_index] = esp_timer_get_time();
 
     module->historical_hashrate_rolling_index = (module->historical_hashrate_rolling_index + 1) % HISTORY_LENGTH;
@@ -224,7 +242,7 @@ void SYSTEM_notify_found_nonce(GlobalState * GLOBAL_STATE, double found_diff, ui
     // logArrayContents(historical_hashrate, HISTORY_LENGTH);
     // logArrayContents(historical_hashrate_time_stamps, HISTORY_LENGTH);
 
-    _check_for_best_diff(GLOBAL_STATE, found_diff, job_id);
+    _check_for_best_diff(found_diff, job_id);
 }
 
 static double _calculate_network_difficulty(uint32_t nBits)
@@ -244,16 +262,16 @@ static double _calculate_network_difficulty(uint32_t nBits)
     return D1 / target;
 }
 
-static void _check_for_best_diff(GlobalState * GLOBAL_STATE, double diff, uint8_t job_id)
+static void _check_for_best_diff(double diff, uint8_t job_id)
 {
-    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+    SystemModule* const module = &GLOBAL_STATE.SYSTEM_MODULE;
 
     if ((uint64_t) diff > module->best_session_nonce_diff) {
         module->best_session_nonce_diff = (uint64_t) diff;
         _suffix_string((uint64_t) diff, module->best_session_diff_string, DIFF_STRING_SIZE, 0);
     }
 
-    double network_diff = _calculate_network_difficulty(GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[job_id]->target);
+    double network_diff = _calculate_network_difficulty(GLOBAL_STATE.ASIC_TASK_MODULE.active_jobs[job_id]->target);
     if (diff > network_diff) {
         module->FOUND_BLOCK = true;
         ESP_LOGI(TAG, "FOUND BLOCK!!!!!!!!!!!!!!!!!!!!!! %f > %f", diff, network_diff);

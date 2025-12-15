@@ -4,7 +4,7 @@
 
 static const char * TAG = "thermal";
 
-esp_err_t Thermal_init(DeviceConfig * DEVICE_CONFIG)
+esp_err_t Thermal_init(DeviceConfig* const DEVICE_CONFIG)
 {
     if (DEVICE_CONFIG->EMC2101) {
         ESP_LOGI(TAG, "Initializing EMC2101 (Temperature offset: %dC)", DEVICE_CONFIG->emc_temp_offset);

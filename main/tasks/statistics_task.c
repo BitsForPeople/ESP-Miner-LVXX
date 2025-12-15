@@ -260,17 +260,17 @@ static void statsTimerCb(TimerHandle_t xTimer);
 
 bool statistics_set_collection_interval(uint16_t intervalSeconds);
 
-void statistics_init(void* const pvParameters)
+void statistics_init(void)
 {
     if(mux == NULL) {
         mux = xSemaphoreCreateMutexStatic(&muxMem);
     }
     if(statsTimerHdl == NULL) {
-        GlobalState* const GLOBAL_STATE = (GlobalState *) pvParameters;
+        // GlobalState* const GLOBAL_STATE = (GlobalState *) pvParameters;
         statsTimerHdl = xTimerCreateStatic("stats",
             DEFAULT_POLL_RATE / portTICK_PERIOD_MS,
             true,
-            GLOBAL_STATE,
+            NULL,
             statsTimerCb,
             &statsTimerMem);
     }
@@ -287,9 +287,9 @@ void statistics_deinit(void) {
     }
 }
 
-static inline void collectStats(GlobalState* const GLOBAL_STATE) {
-    SystemModule* const sys_module = &GLOBAL_STATE->SYSTEM_MODULE;
-    PowerManagementModule* const power_management = &GLOBAL_STATE->POWER_MANAGEMENT_MODULE;
+static inline void collectStats(void) {
+    SystemModule* const sys_module = &GLOBAL_STATE.SYSTEM_MODULE;
+    PowerManagementModule* const power_management = &GLOBAL_STATE.POWER_MANAGEMENT_MODULE;
     struct StatisticsData statsData = {};
 
     const uint32_t currentTime = esp_timer_get_time() / (1000*100); // Resolution: 100ms
@@ -303,8 +303,8 @@ static inline void collectStats(GlobalState* const GLOBAL_STATE) {
     statsData.vrTemperature = power_management->vr_temp;
     statsData.power = power_management->power;
     statsData.voltage = power_management->voltage;
-    statsData.current = Power_get_current(GLOBAL_STATE);
-    statsData.coreVoltageActual = VCORE_get_voltage_mv(GLOBAL_STATE);
+    statsData.current = Power_get_current(&GLOBAL_STATE);
+    statsData.coreVoltageActual = VCORE_get_voltage_mv(&GLOBAL_STATE);
     statsData.fanSpeed = power_management->fan_perc;
     statsData.fanRPM = power_management->fan_rpm;
     statsData.wifiRSSI = wifiRSSI;
@@ -316,7 +316,7 @@ static inline void collectStats(GlobalState* const GLOBAL_STATE) {
 
 static void statsTimerCb(TimerHandle_t xTimer) {
     if(!statsTimerShutdown) {
-        collectStats((GlobalState*)pvTimerGetTimerID(xTimer));
+        collectStats();
     } else {
         releaseStatsBuffer();
         /* Controlling a timer from the timer callback could lead to a deadlock,
@@ -356,8 +356,8 @@ bool statistics_set_collection_interval(const uint16_t intervalSeconds) {
 //     ESP_LOGI(TAG, "Starting");
 
 //     GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
-//     SystemModule * sys_module = &GLOBAL_STATE->SYSTEM_MODULE;
-//     PowerManagementModule * power_management = &GLOBAL_STATE->POWER_MANAGEMENT_MODULE;
+//     SystemModule * sys_module = &GLOBAL_STATE.SYSTEM_MODULE;
+//     PowerManagementModule * power_management = &GLOBAL_STATE.POWER_MANAGEMENT_MODULE;
 //     struct StatisticsData statsData = {};
 
 //     TickType_t taskWakeTime = xTaskGetTickCount();

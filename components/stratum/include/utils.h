@@ -5,6 +5,10 @@
 #include <stdint.h>
 #include "mining_types.h"
 
+size_t nonce_from_hex(const char* hex, Nonce_t* out_nonce);
+size_t nonce_to_hex(const Nonce_t* nonce, char* out_hex);
+size_t jobid_from_str(const char* const str, JobId_t* const out_jobId);
+
 int hex2char(uint8_t x, char *c);
 
 size_t bin2hex(const uint8_t *buf, size_t buflen, char *hex, size_t hexlen);

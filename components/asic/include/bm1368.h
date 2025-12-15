@@ -13,7 +13,9 @@
 extern const AsicDrvr_t BM1368_drvr;
 
 unsigned BM1368_get_compatibility(uint16_t chip_id);
+// uint32_t BM1368_get_pref_num_midstates(void);
 uint8_t BM1368_init(float frequency, uint16_t asic_count, uint16_t difficulty);
+void BM1368_set_diff_mask(uint32_t difficulty);
 void BM1368_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job);
 void BM1368_set_version_mask(uint32_t version_mask);
 int BM1368_set_max_baud(void);

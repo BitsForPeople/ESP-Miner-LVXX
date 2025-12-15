@@ -10,7 +10,7 @@ esp_err_t ASIC_receive_work(uint8_t * buffer, int buffer_size)
 {
     static const uint16_t RX_PREAMBL = 0x55AA;
 
-    int received = SERIAL_rx(buffer, buffer_size, 10000);
+    int received = SERIAL_rx(buffer, buffer_size, 10000 / portTICK_PERIOD_MS);
 
     if (received < 0) {
         ESP_LOGE(TAG, "UART error in serial RX");

@@ -28,6 +28,24 @@ typedef struct HashLink {
 
 
 
+
+typedef struct Nonce {
+    union {
+        uint64_t u64[2];
+        uint32_t u32[4];
+        uint8_t u8[16];
+    };
+    uint8_t size;
+} Nonce_t;
+
+#define JOB_ID_MAX_LEN (24)
+
+typedef struct JobId {
+    char idstr[JOB_ID_MAX_LEN + 1];
+    uint8_t len;
+} JobId_t;
+
+
 typedef struct MemSpan {
     union {
         void* start;

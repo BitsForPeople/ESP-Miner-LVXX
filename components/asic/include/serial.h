@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "freertos/FreeRTOS.h"
+
 #include "esp_err.h"
 
 
@@ -16,7 +18,7 @@ typedef enum
 int SERIAL_send(const uint8_t *, int, bool);
 esp_err_t SERIAL_init(void);
 void SERIAL_debug_rx(void);
-int16_t SERIAL_rx(uint8_t *, uint16_t, uint16_t);
+int SERIAL_rx(uint8_t *, size_t, TickType_t);
 void SERIAL_clear_buffer(void);
 esp_err_t SERIAL_set_baud(int baud);
 

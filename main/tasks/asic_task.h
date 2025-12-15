@@ -1,7 +1,10 @@
-#ifndef ASIC_TASK_H_
-#define ASIC_TASK_H_
-
+#pragma once
 #include "mining.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct
 {
     // ASIC may not return the nonce in the same order as the jobs were sent
@@ -12,4 +15,7 @@ typedef struct
 
 void ASIC_task(void *pvParameters);
 
-#endif /* ASIC_TASK_H_ */
+#ifdef __cplusplus
+}
+#endif
+

@@ -24,7 +24,7 @@ static const DisplayConfig display_configs[] = {
     { .name = "SH1107 (128x128)", .display = SH1107,  .h_res = 128, .v_res = 128, },
 };
 
-esp_err_t display_init(void * pvParameters);
+esp_err_t display_init(void);
 esp_err_t display_on(bool display_on);
 
 #endif /* DISPLAY_H_ */

@@ -11,6 +11,10 @@
 #include <esp_log.h>
 #include "bm_job_pool.h"
 
+#include "jobfactory.h"
+
+#include "stratum_rpc.h"
+
 static const char* const TAG = "mining";
 
 
@@ -112,8 +116,12 @@ MemSpan_t construct_coinbase_tx_bin(const char* const coinbase_1, const char* co
         return result;
     }
 
+    // uint32_t xn2Pos;
+    // uint32_t xn2Len;
     if(max_out > 0) {
+// xn2Pos = (out - out_cb.start_u8);
         const uint32_t l = hex2bin(extranonce_2,out,max_out);
+// xn2Len = l;
         max_out -= l;
         out += l;
     } else {
@@ -130,6 +138,12 @@ MemSpan_t construct_coinbase_tx_bin(const char* const coinbase_1, const char* co
 
     result.start = out_cb.start;
     result.size = out - out_cb.start_u8;
+// ESP_LOGW(TAG, "CB sz: %" PRIu32 ", xn2 @ %" PRIu32 "-%" PRIu32, (uint32_t)result.size, xn2Pos, xn2Pos+xn2Len);
+
+// setXn2(extranonce_2);
+// cmpcb(result);
+
+// rpc_check_coinbase(&result, extranonce_2);
     return result;
 
 }
@@ -179,7 +193,7 @@ void calculate_merkle_root_hash(const char *coinbase_tx, const uint8_t merkle_br
 }
 
 // take a mining_notify struct with ascii hex strings and convert it to a bm_job struct
-void construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, const uint32_t version_mask, const uint32_t difficulty, bm_job* const out_job)
+void construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, const uint32_t version_mask, const uint32_t difficulty, bool build_midstates, bm_job* const out_job)
 {
     out_job->version = params->version;
     out_job->target = params->target;
@@ -193,38 +207,43 @@ void construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, co
 
 // TODO: This is unnecessary when the ASIC doesn't need a midstate:
 
-    ////make the midstate hash
-    uint8_t midstate_data[64];
+    if(build_midstates) {
 
-    // copy 68 bytes header data into midstate (and deal with endianess)
-    memcpy(midstate_data, &out_job->version, 4);             // copy version
-    memcpy(midstate_data + 4, out_job->prev_block_hash, 32); // copy prev_block_hash
-    memcpy(midstate_data + 36, out_job->merkle_root, 28);    // copy merkle_root
+        ////make the midstate hash
+        uint8_t midstate_data[64];
 
-    midstate_sha256_bin(midstate_data, 64, out_job->midstate); // make the midstate hash
-    reverse_bytes(out_job->midstate, 32);                      // reverse the midstate bytes for the BM job packet
+        // copy 68 bytes header data into midstate (and deal with endianess)
+        memcpy(midstate_data, &out_job->version, 4);             // copy version
+        memcpy(midstate_data + 4, out_job->prev_block_hash, 32); // copy prev_block_hash
+        memcpy(midstate_data + 36, out_job->merkle_root, 28);    // copy merkle_root
 
-    if (version_mask != 0)
-    {
-        uint32_t rolled_version = increment_bitmask(out_job->version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, out_job->midstate1);
-        reverse_bytes(out_job->midstate1, 32);
+        midstate_sha256_bin(midstate_data, 64, out_job->midstate); // make the midstate hash
+        reverse_bytes(out_job->midstate, 32);                      // reverse the midstate bytes for the BM job packet
 
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, out_job->midstate2);
-        reverse_bytes(out_job->midstate2, 32);
+        if (version_mask != 0)
+        {
+            uint32_t rolled_version = increment_bitmask(out_job->version, version_mask);
+            memcpy(midstate_data, &rolled_version, 4);
+            midstate_sha256_bin(midstate_data, 64, out_job->midstate1);
+            reverse_bytes(out_job->midstate1, 32);
 
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, out_job->midstate3);
-        reverse_bytes(out_job->midstate3, 32);
-        out_job->num_midstates = 4;
-    }
-    else
-    {
-        out_job->num_midstates = 1;
+            rolled_version = increment_bitmask(rolled_version, version_mask);
+            memcpy(midstate_data, &rolled_version, 4);
+            midstate_sha256_bin(midstate_data, 64, out_job->midstate2);
+            reverse_bytes(out_job->midstate2, 32);
+
+            rolled_version = increment_bitmask(rolled_version, version_mask);
+            memcpy(midstate_data, &rolled_version, 4);
+            midstate_sha256_bin(midstate_data, 64, out_job->midstate3);
+            reverse_bytes(out_job->midstate3, 32);
+            out_job->num_midstates = 4;
+        }
+        else
+        {
+            out_job->num_midstates = 1;
+        }
+    } else {
+        out_job->num_midstates = 0;
     }
 
     // return new_job;
@@ -385,6 +404,23 @@ uint64_t test_nonce_value(const bm_job* const job, const uint32_t nonce, const u
     Hash_t* const hashBuf = &hdr.prev_block_hash;
 
     mining_hash_block(&hdr,hashBuf); 
+
+    // {
+
+    //     uint32_t h = 0;
+    //     unsigned zbits = 0;
+    //     for(unsigned i = 8; i != 0 && h == 0; --i) {
+    //         h = hashBuf->h[i-1];
+    //         printf("%08" PRIx32 " ", h);
+    //         if(h == 0) {
+    //             zbits += 32;
+    //         }
+    //     }
+    //     if(h != 0) {
+    //         zbits += __builtin_clz(h);
+    //     }
+    //     printf("... (=> %u zeros)\n", zbits);
+    // }
 
     return mining_get_hash_diff_u64(hashBuf);
 }

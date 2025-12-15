@@ -91,7 +91,7 @@ void pid_set_tunings_adv(PIDController *pid, pid_fp_t Kp, pid_fp_t Ki, pid_fp_t 
     pid->dispKi = Ki;
     pid->dispKd = Kd;
 
-    pid_fp_t sampleTimeInSec = ((pid_fp_t)pid->sampleTime) / 1000.0;
+    pid_fp_t sampleTimeInSec = ((pid_fp_t)pid->sampleTime) * 0.001f;
     pid->kp = Kp;
     pid->ki = Ki * sampleTimeInSec;
     pid->kd = Kd / sampleTimeInSec;

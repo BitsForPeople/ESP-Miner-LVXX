@@ -52,7 +52,7 @@ static esp_err_t log_on_error(esp_err_t err, i2c_master_dev_handle_t handle) {
  */
 esp_err_t i2c_bitaxe_init(void)
 {
-    i2c_master_bus_config_t i2c_bus_config = {
+    static const i2c_master_bus_config_t i2c_bus_config = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .i2c_port = I2C_MASTER_NUM,
         .scl_io_num = GPIO_I2C_SCL,

@@ -12,7 +12,7 @@ float Power_get_current(GlobalState * GLOBAL_STATE)
         return TPS546_get_iout(0) * 1000.0;
     }
     if (GLOBAL_STATE->DEVICE_CONFIG.TPS546_3) {
-        return fmax(fmax(TPS546_get_iout(0), TPS546_get_iout(1)), TPS546_get_iout(2)) * 1000.0;
+        return fmax(fmax(TPS546_get_iout(0), TPS546_get_iout(1)), TPS546_get_iout(2)) * 1000.0f;
     }
     if (GLOBAL_STATE->DEVICE_CONFIG.INA260) {
         // TODO: Does this check still need to happen?
@@ -30,9 +30,9 @@ float Power_get_power(GlobalState * GLOBAL_STATE)
     float current = 0.0;
 
     if (GLOBAL_STATE->DEVICE_CONFIG.TPS546 || GLOBAL_STATE->DEVICE_CONFIG.TPS546_1) {
-        current = TPS546_get_iout(0) * 1000.0;
+        current = TPS546_get_iout(0) * 1000.0f;
         // calculate regulator power (in milliwatts)
-        power = (TPS546_get_vout(0) * current) / 1000.0;
+        power = (TPS546_get_vout(0) * current) * 0.001f;
         // The power reading from the TPS546 is only it's output power. So the rest of the Bitaxe power is not accounted for.
         power += GLOBAL_STATE->DEVICE_CONFIG.family.power_offset; // Add offset for the rest of the Bitaxe power. TODO: this better.
     }
@@ -45,7 +45,7 @@ float Power_get_power(GlobalState * GLOBAL_STATE)
     if (GLOBAL_STATE->DEVICE_CONFIG.INA260) {
         // TODO: Does this check still need to happen?
         if (INA260_installed() == true) {
-            power = INA260_read_power() / 1000.0;
+            power = INA260_read_power() * 0.001f;
         }
     }    
 

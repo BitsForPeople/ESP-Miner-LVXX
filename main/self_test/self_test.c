@@ -33,6 +33,7 @@
 #include "asic.h"
 #include "device_config.h"
 #include "asic_reset.h"
+#include "system.h"
 
 #define GPIO_ASIC_ENABLE CONFIG_GPIO_ASIC_ENABLE
 
@@ -50,7 +51,9 @@
 //Test Difficulty
 #define DIFFICULTY 8
 
-static const char * TAG = "self_test";
+static const char* const TAG = "self_test";
+
+static const ASIC_ctrl_cfg_t ASIC_CTRL_CFG = { .reset_fn = set_asic_reset };
 
 static SemaphoreHandle_t longPressSemaphore;
 static bool isFactoryTest = false;
@@ -133,7 +136,7 @@ static esp_err_t test_core_voltage(GlobalState * GLOBAL_STATE)
 
 esp_err_t test_display(GlobalState * GLOBAL_STATE) {
     // Display testing
-    if (display_init(GLOBAL_STATE) != ESP_OK) {
+    if (display_init() != ESP_OK) {
         display_msg("DISPLAY:FAIL", GLOBAL_STATE);
         return ESP_FAIL;
     }
@@ -161,7 +164,7 @@ esp_err_t test_input(GlobalState * GLOBAL_STATE) {
 
 esp_err_t test_screen(GlobalState * GLOBAL_STATE) {
     // Screen testing
-    if (screen_start(GLOBAL_STATE) != ESP_OK) {
+    if (screen_start() != ESP_OK) {
         display_msg("SCREEN:FAIL", GLOBAL_STATE);
         return ESP_FAIL;
     }
@@ -174,7 +177,7 @@ esp_err_t test_screen(GlobalState * GLOBAL_STATE) {
 esp_err_t init_voltage_regulator(GlobalState * GLOBAL_STATE) {
     ESP_RETURN_ON_ERROR(VCORE_init(GLOBAL_STATE), TAG, "VCORE init failed!");
 
-    ESP_RETURN_ON_ERROR(VCORE_set_voltage(GLOBAL_STATE, nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE) / 1000.0), TAG, "VCORE set voltage failed!");
+    ESP_RETURN_ON_ERROR(VCORE_set_voltage(GLOBAL_STATE, nvs_config_get_u16(NVS_CONFIG_ASIC_VOLTAGE, CONFIG_ASIC_VOLTAGE) * 0.001f), TAG, "VCORE set voltage failed!");
     
     return ESP_OK;
 }
@@ -319,10 +322,15 @@ bool self_test(void * pvParameters)
         tests_done(GLOBAL_STATE, false);
     }
 
-    if (asic_reset() != ESP_OK) {
-        ESP_LOGE(TAG, "ASIC reset failed!");
+    if(SYSTEM_init_ctrl_pins() != ESP_OK ) {
+        ESP_LOGE(TAG, "Init ctrl pins failed!");
         tests_done(GLOBAL_STATE, false);
     }
+
+    // if (asic_reset() != ESP_OK) {
+    //     ESP_LOGE(TAG, "ASIC reset failed!");
+    //     tests_done(GLOBAL_STATE, false);
+    // }
 
     //test for number of ASICs
     if (SERIAL_init() != ESP_OK) {
@@ -334,9 +342,10 @@ bool self_test(void * pvParameters)
 
     GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty = DIFFICULTY;
 
-    uint8_t chips_detected = ASIC_init(GLOBAL_STATE);
+    int chips_detected = ASIC_init(GLOBAL_STATE, &ASIC_CTRL_CFG);
+
     uint8_t chips_expected = GLOBAL_STATE->DEVICE_CONFIG.family.asic_count;
-    ESP_LOGI(TAG, "%u chips detected, %u expected", chips_detected, chips_expected);
+    ESP_LOGI(TAG, "%i chips detected, %u expected", chips_detected, chips_expected);
 
     if (chips_detected != chips_expected) {
         ESP_LOGE(TAG, "SELF-TEST FAIL, %d of %d CHIPS DETECTED", chips_detected, chips_expected);
@@ -412,7 +421,7 @@ bool self_test(void * pvParameters)
     calculate_merkle_root_hash(coinbase_tx, merkles, num_merkles,&merkle_root);    
 
     bm_job job;
-    construct_bm_job(&notify_message, &merkle_root, 0x1fffe000, 1000000, &job);
+    construct_bm_job(&notify_message, &merkle_root, 0x1fffe000, 1000000, 4, &job);
 
     ESP_LOGI(TAG, "Sending work");
 
@@ -444,7 +453,7 @@ bool self_test(void * pvParameters)
     float expected_hashrate_mhs = GLOBAL_STATE->POWER_MANAGEMENT_MODULE.frequency_value 
                                 * GLOBAL_STATE->DEVICE_CONFIG.family.asic.small_core_count 
                                 * GLOBAL_STATE->DEVICE_CONFIG.family.asic.hashrate_test_percentage_target
-                                / 1000.0f;
+                                * 0.001f;
 
     if (hash_rate < expected_hashrate_mhs) {
         display_msg("HASHRATE:FAIL", GLOBAL_STATE);

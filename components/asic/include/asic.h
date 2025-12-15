@@ -3,12 +3,18 @@
 
 #include <esp_err.h>
 #include "global_state.h"
+#include "asic_types.h"
 #include "asic_detect.h"
 #include "asic_drvr.h"
 #include "task_result.h"
 
+static const float ASIC_INIT_FREQUENCY_MHZ = 50.0f;
 
-uint8_t ASIC_init(GlobalState * GLOBAL_STATE);
+int ASIC_init(GlobalState * GLOBAL_STATE, const ASIC_ctrl_cfg_t* cfg);
+
+static inline void ASIC_set_difficulty_mask(const GlobalState* const GLOBAL_STATE,uint32_t difficulty) {
+    GLOBAL_STATE->asic_drvr->set_diff_mask(difficulty);
+}
 
 static inline const char* ASIC_get_driver_name(const GlobalState* const GLOBAL_STATE) {
     return GLOBAL_STATE->asic_drvr->name;
@@ -41,6 +47,10 @@ static inline bool ASIC_set_version_mask(const GlobalState* const GLOBAL_STATE, 
     } else {
         return false;
     }
+}
+
+static inline bool ASIC_is_midstate_autogen(const GlobalState* const GLOBAL_STATE) {
+    return GLOBAL_STATE->asic_drvr->midstate_autogen;
 }
 
 bool ASIC_set_frequency(GlobalState * GLOBAL_STATE, float target_frequency);

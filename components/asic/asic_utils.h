@@ -9,11 +9,14 @@ extern "C" {
 esp_err_t ASIC_receive_work(uint8_t * buffer, int buffer_size);
 void ASIC_cpy_hash_reverse_words(const void* const src, void* dst);
 
-static inline void ASIC_get_difficulty_mask(const uint32_t difficulty, uint8_t* const job_difficulty_mask)
+static inline void ASIC_get_difficulty_mask(uint32_t difficulty, uint8_t* const job_difficulty_mask)
 {
     // The mask must be a power of 2 so there are no holes
     // Correct:   {0b00000000, 0b00000000, 0b11111111, 0b11111111}
     // Incorrect: {0b00000000, 0b00000000, 0b11100111, 0b11111111}
+
+    difficulty = difficulty < 0xffff ? difficulty : 0xffff;
+    difficulty = difficulty > 32 ? difficulty : 32;
 
     job_difficulty_mask[0] = 0x00;
     job_difficulty_mask[1] = 0x14; // TICKET_MASK

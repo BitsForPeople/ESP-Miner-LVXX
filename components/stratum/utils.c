@@ -7,6 +7,15 @@
 
 #include "mem_search.h"
 
+#include "esp_log.h"
+
+
+// static const char* const TAG = "mining_utils";
+
+static const char HEXCHARS[] = 
+    {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+
+
 #ifndef bswap_16
 #define bswap_16(a) ((((uint16_t)(a) << 8) & 0xff00) | (((uint16_t)(a) >> 8) & 0xff))
 #endif
@@ -141,6 +150,37 @@ void flip32bytes(void* dst, const void* src) {
 
 }
 
+
+size_t jobid_from_str(const char* const str, JobId_t* const out_jobId) {
+    size_t len = strlcpy(out_jobId->idstr,str,sizeof(out_jobId->idstr));
+    if(len >= sizeof(out_jobId->idstr)) {
+        len = 0;
+    }
+    out_jobId->len = len;
+    return len;
+}
+
+size_t nonce_from_hex(const char* const hex, Nonce_t* const out_nonce) {
+    size_t len = hex2bin(hex,out_nonce->u8,sizeof(out_nonce->u8));
+    out_nonce->size = len;
+    return len;
+}
+
+
+size_t nonce_to_hex(const Nonce_t* const nonce, char* out_hex) {
+    const uint8_t* ptr = nonce->u8;
+    const uint8_t* const end = ptr + nonce->size;
+    while(ptr < end) {
+        uint32_t b = ptr[0];
+        out_hex[0] = HEXCHARS[b >> 4];
+        out_hex[1] = HEXCHARS[b & 0xf];
+        out_hex += 2;
+        ptr += 1;
+    }
+    return nonce->size * 2;
+}
+
+
 // void flip32bytes(void *dest_p, const void *src_p)
 // {
 //     uint32_t *dest = dest_p;
@@ -169,8 +209,7 @@ int hex2char(uint8_t x, char *c)
     return 0;
 }
 
-static const char HEXCHARS[] = 
-    {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+
 
 size_t bin2hex(const uint8_t *buf, size_t buflen, char *hex, size_t hexlen)
 {
@@ -230,10 +269,10 @@ static inline unsigned hexchar2bin(const unsigned ch) {
     */
 
     // With conditional move:
-    // unsigned a = (x < 0) ? (A_OFF-Z_OFF) : 0;
+    unsigned a = (x < 0) ? (A_OFF-Z_OFF) : 0;
 
     // Without conditional move:
-    uint32_t a = (x >> 31) & (A_OFF-Z_OFF);
+    // uint32_t a = (x >> 31) & (A_OFF-Z_OFF);
     return x+a;
 }
 
@@ -241,10 +280,28 @@ static inline unsigned hex2u8(const char* hex) {
     return (hexchar2bin(hex[0]) << 4) | (hexchar2bin(hex[1]));
 }
 
-size_t hex2bin(const char *hex, uint8_t *bin, size_t bin_len)
+static inline uint32_t min(const uint32_t a, const uint32_t b) {
+    return (a<b) ? a : b;
+}
+
+size_t hex2bin(const char *hex, uint8_t* bin, size_t bin_len)
 {
+
+    // uint8_t* const end = bin + bin_len;
+    // uint8_t* out = bin;
+    // while(out < end && hex[0] != '\0' && hex[1] != '\0') {
+    //     *out = hex2u8(hex);
+    //     out += 1;
+    //     hex += 2;
+    // }
+    // if(out < end && hex[0] != '\0') {
+    //     *out = hexchar2bin(hex[0]) << 4;
+    //     out += 1;
+    // }
+
+    // return out - bin;
     const unsigned hex_len = mem_findStrEnd(hex,bin_len*2) - hex;
-    const unsigned byteCnt = (hex_len/2);
+    const unsigned byteCnt = min((hex_len/2),bin_len);
 
     uint8_t* const end = bin + byteCnt;
     while(bin < end) {

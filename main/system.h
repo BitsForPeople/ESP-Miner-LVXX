@@ -16,13 +16,22 @@
     #define FALLBACK_STRATUM_EXTRANONCE_SUBSCRIBE 0
 #endif
 
-void SYSTEM_init_system(GlobalState * GLOBAL_STATE);
-esp_err_t SYSTEM_init_peripherals(GlobalState * GLOBAL_STATE);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-void SYSTEM_notify_accepted_share(GlobalState * GLOBAL_STATE);
-void SYSTEM_notify_rejected_share(GlobalState * GLOBAL_STATE, char * error_msg);
-void SYSTEM_notify_found_nonce(GlobalState * GLOBAL_STATE, double found_diff, uint8_t job_id);
-void SYSTEM_notify_mining_started(GlobalState * GLOBAL_STATE);
-void SYSTEM_notify_new_ntime(GlobalState * GLOBAL_STATE, uint32_t ntime);
+void SYSTEM_init_system(void);
+esp_err_t SYSTEM_init_ctrl_pins(void);
+esp_err_t SYSTEM_init_peripherals(void);
+
+void SYSTEM_notify_accepted_share(void);
+void SYSTEM_notify_rejected_share(char * error_msg);
+void SYSTEM_notify_found_nonce(double found_diff, uint8_t job_id);
+void SYSTEM_notify_mining_started(void);
+void SYSTEM_notify_new_ntime(uint32_t ntime);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SYSTEM_H_ */

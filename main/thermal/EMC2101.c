@@ -144,7 +144,7 @@ float EMC2101_get_external_temp(void)
     }
 
     // Convert the signed reading to temperature in Celsius
-    float result = (float)signed_reading / 8.0;
+    float result = (float)signed_reading * 0.125f;
 
     return result;
 }

@@ -71,8 +71,7 @@ static const MimeMapping_t MIMES[] = {
     {.ext = "ico",  .type = "image/x-icon"},
     {.ext = "svg",  .type = "image/svg+xml"},
     {.ext = "pdf",  .type = "application/pdf"},
-    {.ext = "woff2", .type = "font/woff2"},
-    {.ext = "html", .type = "text/html"}
+    {.ext = "woff2", .type = "font/woff2"}
 };
 
 static const unsigned NUM_MIMES = sizeof(MIMES) / sizeof(MIMES[0]);
@@ -483,25 +482,28 @@ static esp_err_t file_serve_handler(httpd_req_t * req)
     set_content_type_from_file(req, filepath);
 
     char* const chunk = rest_context->scratch;
+
     ssize_t read_bytes;
-    do {
-        /* Read file in chunks into the scratch buffer */
-        read_bytes = read(fd, chunk, SCRATCH_BUFSIZE);
-        if (read_bytes == -1) {
-            ESP_LOGE(TAG, "Failed to read file : %s", filepath);
-        } else if (read_bytes > 0) {
-            /* Send the buffer contents as HTTP response chunk */
-            esp_err_t r = httpd_resp_send_chunk(req, chunk, read_bytes);
-            if (r != ESP_OK) {
-                close(fd);
-                return r;
-            }
-        }
-    } while (read_bytes > 0);
+    esp_err_t r;
+    /* Read file in chunks into the scratch buffer */
+    /* Send the buffer contents as HTTP response chunk */
+    while(
+        ((read_bytes = read(fd, chunk, SCRATCH_BUFSIZE)) > 0) &&
+        ((r = httpd_resp_send_chunk(req, chunk, read_bytes)) == ESP_OK)) {
+
+    }
+
     /* Close file after sending complete */
     close(fd);
 
-    return httpd_resp_send_chunk(req, NULL, 0);
+    if (read_bytes < 0) {
+        ESP_LOGE(TAG, "Failed to read file : %s", filepath);
+    }
+
+    if(r == ESP_OK) {
+        r =  httpd_resp_send_chunk(req, NULL, 0);
+    }
+    return r;
 }
 
 static esp_err_t handle_options_request(httpd_req_t * req)
@@ -924,7 +926,7 @@ static int create_json_statistics_dashboard(cJSON * root)
         if(statisticDataNext(NULL,&statsData)) {
             do {
                 cJSON *valueArray = cJSON_CreateArray();
-                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate_MHz / 1000.f));
+                cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.hashrate_MHz * 0.001f));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.chipTemperature));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.power));
                 cJSON_AddItemToArray(valueArray, cJSON_CreateNumber(statsData.timestamp));
@@ -1200,7 +1202,7 @@ esp_err_t http_404_error_handler(httpd_req_t * req, httpd_err_code_t err)
     return ESP_OK;
 }
 
-esp_err_t start_rest_server(void * pvParameters)
+esp_err_t start_rest_server(void)
 {
     bool enter_recovery = false;
     if (init_fs() != ESP_OK) {

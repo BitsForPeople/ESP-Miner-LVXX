@@ -15,6 +15,11 @@
 #include <stdbool.h>
 #include "asic_task_intf.h"
 
+#include "jobfactory.h"
+#include "stratum_rpc.h"
+#include "mining.h"
+#include "utils.h"
+
 
 #define MAX_RETRY_ATTEMPTS 3
 #define MAX_CRITICAL_RETRY_ATTEMPTS 5
@@ -28,6 +33,11 @@ static StratumApiV1Message stratum_api_v1_message = {};
 
 static const char * primary_stratum_url;
 static uint16_t primary_stratum_port;
+
+static StratumMsg_t stratumMsg;
+
+static Nonce_t curr_extranonce_1;
+
 
 
 // static inline void publish_mining_notify(mining_notify* const mn) {
@@ -67,32 +77,32 @@ bool is_wifi_connected() {
     }
 }
 
-void stratum_reset_uid(GlobalState * GLOBAL_STATE)
+void stratum_reset_uid(void)
 {
     ESP_LOGI(TAG, "Resetting stratum uid");
-    GLOBAL_STATE->send_uid = 1;
+    GLOBAL_STATE.send_uid = 1;
 }
 
 
-void stratum_close_connection(GlobalState * GLOBAL_STATE)
+void stratum_close_connection(void)
 {
     publish_abandon_work();
 
-    if (GLOBAL_STATE->sock < 0) {
+    if (GLOBAL_STATE.sock < 0) {
         ESP_LOGE(TAG, "Socket already shutdown, not shutting down again..");
         return;
     }
 
     ESP_LOGE(TAG, "Shutting down socket and restarting...");
-    shutdown(GLOBAL_STATE->sock, SHUT_RDWR);
-    close(GLOBAL_STATE->sock);
+    shutdown(GLOBAL_STATE.sock, SHUT_RDWR);
+    close(GLOBAL_STATE.sock);
     
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 
 void stratum_primary_heartbeat(void * pvParameters)
 {
-    GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
+    // GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
 
     ESP_LOGI(TAG, "Starting heartbeat thread for primary pool: %s:%d", primary_stratum_url, primary_stratum_port);
     vTaskDelay(10000 / portTICK_PERIOD_MS);
@@ -107,7 +117,7 @@ void stratum_primary_heartbeat(void * pvParameters)
 
     while (1)
     {
-        if (GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback == false) {
+        if (GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback == false) {
             vTaskDelay(10000 / portTICK_PERIOD_MS);
             continue;
         }
@@ -155,8 +165,8 @@ void stratum_primary_heartbeat(void * pvParameters)
         }
 
         int send_uid = 1;
-        STRATUM_V1_subscribe(sock, send_uid++, GLOBAL_STATE->DEVICE_CONFIG.family.asic.name);
-        STRATUM_V1_authorize(sock, send_uid++, GLOBAL_STATE->SYSTEM_MODULE.pool_user, GLOBAL_STATE->SYSTEM_MODULE.pool_pass);
+        STRATUM_V1_subscribe(sock, send_uid++, GLOBAL_STATE.DEVICE_CONFIG.family.asic.name);
+        STRATUM_V1_authorize(sock, send_uid++, GLOBAL_STATE.SYSTEM_MODULE.pool_user, GLOBAL_STATE.SYSTEM_MODULE.pool_pass);
 
         char recv_buffer[BUFFER_SIZE];
         memset(recv_buffer, 0, BUFFER_SIZE);
@@ -172,8 +182,8 @@ void stratum_primary_heartbeat(void * pvParameters)
 
         if (strstr(recv_buffer, "mining.notify") != NULL) {
             ESP_LOGI(TAG, "Heartbeat successful and in fallback mode. Switching back to primary.");
-            GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback = false;
-            stratum_close_connection(GLOBAL_STATE);
+            GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback = false;
+            stratum_close_connection();
             continue;
         }
 
@@ -181,18 +191,32 @@ void stratum_primary_heartbeat(void * pvParameters)
     }
 }
 
+static uint32_t lastCfgModCnt;
 
+static inline uint16_t getSuggestDiff(uint16_t prevSuggestDiff) {
+    uint32_t diff = prevSuggestDiff;
+    if(prevSuggestDiff == 0 || (nvs_config_get_modcount() != lastCfgModCnt)) {
+        lastCfgModCnt = nvs_config_get_modcount();
+        if(GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback) {
+            diff = nvs_config_get_u16(NVS_CONFIG_FALLBACK_STRATUM_DIFFICULTY, CONFIG_FALLBACK_STRATUM_DIFFICULTY);
+        } else {
+            diff = nvs_config_get_u16(NVS_CONFIG_STRATUM_DIFFICULTY, CONFIG_STRATUM_DIFFICULTY);
+        }
+    }
+    return diff;
+}
 
 void stratum_task(void * pvParameters)
 {
-    GlobalState* const GLOBAL_STATE = (GlobalState *) pvParameters;
+    // GlobalState* const GLOBAL_STATE = (GlobalState *) pvParameters;
 
-    primary_stratum_url = GLOBAL_STATE->SYSTEM_MODULE.pool_url;
-    primary_stratum_port = GLOBAL_STATE->SYSTEM_MODULE.pool_port;
-    char * stratum_url = GLOBAL_STATE->SYSTEM_MODULE.pool_url;
-    uint16_t port = GLOBAL_STATE->SYSTEM_MODULE.pool_port;
-    bool extranonce_subscribe = GLOBAL_STATE->SYSTEM_MODULE.pool_extranonce_subscribe;
-    uint16_t difficulty = GLOBAL_STATE->SYSTEM_MODULE.pool_difficulty;
+    primary_stratum_url = GLOBAL_STATE.SYSTEM_MODULE.pool_url;
+    primary_stratum_port = GLOBAL_STATE.SYSTEM_MODULE.pool_port;
+    char * stratum_url = GLOBAL_STATE.SYSTEM_MODULE.pool_url;
+    uint16_t port = GLOBAL_STATE.SYSTEM_MODULE.pool_port;
+    bool extranonce_subscribe = GLOBAL_STATE.SYSTEM_MODULE.pool_extranonce_subscribe;
+    // uint16_t difficulty = GLOBAL_STATE.SYSTEM_MODULE.pool_difficulty;
+    uint16_t suggestDiff = getSuggestDiff(0);
 
     char host_ip[20];
     int addr_family = AF_INET;
@@ -214,33 +238,33 @@ void stratum_task(void * pvParameters)
 
         if (retry_attempts >= MAX_RETRY_ATTEMPTS)
         {
-            if (GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_url == NULL || GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_url[0] == '\0') {
+            if (GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_url == NULL || GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_url[0] == '\0') {
                 ESP_LOGI(TAG, "Unable to switch to fallback. No url configured. (retries: %d)...", retry_attempts);
-                GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback = false;
+                GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback = false;
                 retry_attempts = 0;
                 continue;
             }
 
-            GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback = !GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback;
+            GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback = !GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback;
             
             // Reset share stats at failover
-            for (int i = 0; i < GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats_count; i++) {
-                GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats[i].count = 0;
-                GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats[i].message[0] = '\0';
+            for (int i = 0; i < GLOBAL_STATE.SYSTEM_MODULE.rejected_reason_stats_count; i++) {
+                GLOBAL_STATE.SYSTEM_MODULE.rejected_reason_stats[i].count = 0;
+                GLOBAL_STATE.SYSTEM_MODULE.rejected_reason_stats[i].message[0] = '\0';
             }
-            GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats_count = 0;
-            GLOBAL_STATE->SYSTEM_MODULE.shares_accepted = 0;
-            GLOBAL_STATE->SYSTEM_MODULE.shares_rejected = 0;
-            GLOBAL_STATE->SYSTEM_MODULE.work_received = 0;
+            GLOBAL_STATE.SYSTEM_MODULE.rejected_reason_stats_count = 0;
+            GLOBAL_STATE.SYSTEM_MODULE.shares_accepted = 0;
+            GLOBAL_STATE.SYSTEM_MODULE.shares_rejected = 0;
+            GLOBAL_STATE.SYSTEM_MODULE.work_received = 0;
 
             ESP_LOGI(TAG, "Switching target due to too many failures (retries: %d)...", retry_attempts);
             retry_attempts = 0;
         }
 
-        stratum_url = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_url : GLOBAL_STATE->SYSTEM_MODULE.pool_url;
-        port = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_port : GLOBAL_STATE->SYSTEM_MODULE.pool_port;
-        extranonce_subscribe = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_extranonce_subscribe : GLOBAL_STATE->SYSTEM_MODULE.pool_extranonce_subscribe;
-        difficulty = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_difficulty : GLOBAL_STATE->SYSTEM_MODULE.pool_difficulty;
+        stratum_url = GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_url : GLOBAL_STATE.SYSTEM_MODULE.pool_url;
+        port = GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_port : GLOBAL_STATE.SYSTEM_MODULE.pool_port;
+        extranonce_subscribe = GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_extranonce_subscribe : GLOBAL_STATE.SYSTEM_MODULE.pool_extranonce_subscribe;
+        // difficulty = GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_difficulty : GLOBAL_STATE.SYSTEM_MODULE.pool_difficulty;
 
         struct hostent *dns_addr = gethostbyname(stratum_url);
         if (dns_addr == NULL) {
@@ -257,9 +281,9 @@ void stratum_task(void * pvParameters)
         dest_addr.sin_family = AF_INET;
         dest_addr.sin_port = htons(port);
 
-        GLOBAL_STATE->sock = socket(addr_family, SOCK_STREAM, ip_protocol);
+        GLOBAL_STATE.sock = socket(addr_family, SOCK_STREAM, ip_protocol);
         vTaskDelay(300 / portTICK_PERIOD_MS);
-        if (GLOBAL_STATE->sock < 0) {
+        if (GLOBAL_STATE.sock < 0) {
             ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
             if (++retry_critical_attempts > MAX_CRITICAL_RETRY_ATTEMPTS) {
                 ESP_LOGE(TAG, "Max retry attempts reached, restarting...");
@@ -272,89 +296,94 @@ void stratum_task(void * pvParameters)
         retry_critical_attempts = 0;
 
         ESP_LOGI(TAG, "Socket created, connecting to %s:%d", host_ip, port);
-        int err = connect(GLOBAL_STATE->sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6));
+        int err = connect(GLOBAL_STATE.sock, (struct sockaddr *)&dest_addr, sizeof(struct sockaddr_in6));
         if (err != 0)
         {
             retry_attempts++;
             ESP_LOGE(TAG, "Socket unable to connect to %s:%d (errno %d: %s)", stratum_url, port, errno, strerror(errno));
             // close the socket
-            shutdown(GLOBAL_STATE->sock, SHUT_RDWR);
-            close(GLOBAL_STATE->sock);
+            shutdown(GLOBAL_STATE.sock, SHUT_RDWR);
+            close(GLOBAL_STATE.sock);
             // instead of restarting, retry this every 5 seconds
             vTaskDelay(5000 / portTICK_PERIOD_MS);
             continue;
         }
 
-        if (setsockopt(GLOBAL_STATE->sock, SOL_SOCKET, SO_SNDTIMEO, &tcp_snd_timeout, sizeof(tcp_snd_timeout)) != 0) {
+        if (setsockopt(GLOBAL_STATE.sock, SOL_SOCKET, SO_SNDTIMEO, &tcp_snd_timeout, sizeof(tcp_snd_timeout)) != 0) {
             ESP_LOGE(TAG, "Fail to setsockopt SO_SNDTIMEO");
         }
 
-        if (setsockopt(GLOBAL_STATE->sock, SOL_SOCKET, SO_RCVTIMEO , &tcp_rcv_timeout, sizeof(tcp_rcv_timeout)) != 0) {
+        if (setsockopt(GLOBAL_STATE.sock, SOL_SOCKET, SO_RCVTIMEO , &tcp_rcv_timeout, sizeof(tcp_rcv_timeout)) != 0) {
             ESP_LOGE(TAG, "Fail to setsockopt SO_RCVTIMEO ");
         }
 
-        stratum_reset_uid(GLOBAL_STATE);
+        stratum_reset_uid();
         publish_abandon_work();
 
         STRATUM_V1_clear_jsonrpc_buffer();
 
         ///// Start Stratum Action
         // mining.configure - ID: 1
-        STRATUM_V1_configure_version_rolling(GLOBAL_STATE->sock, GLOBAL_STATE->send_uid++, &GLOBAL_STATE->version_mask);
+        STRATUM_V1_configure_version_rolling(GLOBAL_STATE.sock, STRATUM_TX_ID_CONFIGURE /* GLOBAL_STATE.send_uid++ */, &GLOBAL_STATE.version_mask);
 
         // mining.subscribe - ID: 2
-        STRATUM_V1_subscribe(GLOBAL_STATE->sock, GLOBAL_STATE->send_uid++, GLOBAL_STATE->DEVICE_CONFIG.family.asic.name);
+        STRATUM_V1_subscribe(GLOBAL_STATE.sock, STRATUM_TX_ID_SUBSCRIBE /*GLOBAL_STATE.send_uid++*/, GLOBAL_STATE.DEVICE_CONFIG.family.asic.name);
 
-        char * username = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE->SYSTEM_MODULE.pool_user;
-        char * password = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_pass : GLOBAL_STATE->SYSTEM_MODULE.pool_pass;
+        char * username = GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE.SYSTEM_MODULE.pool_user;
+        char * password = GLOBAL_STATE.SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE.SYSTEM_MODULE.fallback_pool_pass : GLOBAL_STATE.SYSTEM_MODULE.pool_pass;
 
-        int authorize_message_id = GLOBAL_STATE->send_uid++;
+        // int authorize_message_id = GLOBAL_STATE.send_uid++;
         //mining.authorize - ID: 3
-        STRATUM_V1_authorize(GLOBAL_STATE->sock, authorize_message_id, username, password);
-        STRATUM_V1_stamp_tx(authorize_message_id);
+        STRATUM_V1_authorize(GLOBAL_STATE.sock, STRATUM_TX_ID_AUTHORIZE, username, password);
+        STRATUM_V1_stamp_tx(STRATUM_TX_ID_AUTHORIZE);
 
         while (1) {
-            asm ("" : "+m" (*GLOBAL_STATE)); // Sync all of the global state.
+            asm ("" : "+m" (GLOBAL_STATE)); // Sync all of the global state.
+
             {
-                const char* const line = STRATUM_V1_receive_jsonrpc_line(GLOBAL_STATE->sock);
+                const char* const line = STRATUM_V1_receive_jsonrpc_line(GLOBAL_STATE.sock);
+
                 if (line == NULL) {
                     ESP_LOGE(TAG, "Failed to receive JSON-RPC line, reconnecting...");
                     retry_attempts++;
-                    stratum_close_connection(GLOBAL_STATE);
+                    stratum_close_connection();
                     break;
                 }
-
                 double response_time_ms = STRATUM_V1_get_response_time_ms(stratum_api_v1_message.message_id);
                 if (response_time_ms >= 0) {
                     ESP_LOGI(TAG, "Stratum response time: %.2f ms", response_time_ms);
-                    GLOBAL_STATE->SYSTEM_MODULE.response_time = response_time_ms;
+                    GLOBAL_STATE.SYSTEM_MODULE.response_time = response_time_ms;
                 }
 
                 STRATUM_V1_parse(&stratum_api_v1_message, line);
+
+                // rpc_parse_msg(line,&stratumMsg);
             }
 
             if (stratum_api_v1_message.method == MINING_NOTIFY) {
-                GLOBAL_STATE->SYSTEM_MODULE.work_received++;
-                SYSTEM_notify_new_ntime(GLOBAL_STATE, stratum_api_v1_message.mining_notification->ntime);
+
+                GLOBAL_STATE.SYSTEM_MODULE.work_received++;
+                SYSTEM_notify_new_ntime(stratum_api_v1_message.mining_notification->ntime);
 
                 if(stratum_api_v1_message.should_abandon_work) {
                     publish_abandon_work();
                 }
+
                 asic_task_send_new_work(stratum_api_v1_message.mining_notification);
 
             } else if (stratum_api_v1_message.method == MINING_SET_DIFFICULTY) {
                 ESP_LOGI(TAG, "Set pool difficulty: %ld", stratum_api_v1_message.new_difficulty);
-                // const uint32_t oldDiff = GLOBAL_STATE->pool_difficulty;
-                GLOBAL_STATE->pool_difficulty = stratum_api_v1_message.new_difficulty;
-                GLOBAL_STATE->new_set_mining_difficulty_msg = true;
+                // const uint32_t oldDiff = GLOBAL_STATE.pool_difficulty;
+                GLOBAL_STATE.pool_difficulty = stratum_api_v1_message.new_difficulty;
+                GLOBAL_STATE.new_set_mining_difficulty_msg = true;
 
                 asic_task_notify_diff_change();
 
             } else if (stratum_api_v1_message.method == MINING_SET_VERSION_MASK ||
                     stratum_api_v1_message.method == STRATUM_RESULT_VERSION_MASK) {
                 ESP_LOGI(TAG, "Set version mask: %08lx", stratum_api_v1_message.version_mask);
-                GLOBAL_STATE->version_mask = stratum_api_v1_message.version_mask;
-                GLOBAL_STATE->new_stratum_version_rolling_msg = true;
+                GLOBAL_STATE.version_mask = stratum_api_v1_message.version_mask;
+                GLOBAL_STATE.new_stratum_version_rolling_msg = true;
 
                 asic_task_notify_version_change();
 
@@ -368,41 +397,62 @@ void stratum_task(void * pvParameters)
                 }
                 ESP_LOGI(TAG, "Set extranonce: %s, extranonce_2_len: %d", stratum_api_v1_message.extranonce_str, stratum_api_v1_message.extranonce_2_len);
 
+nonce_from_hex(stratum_api_v1_message.extranonce_str, &curr_extranonce_1);
 // FIXME Data race on extranonce_str.
-                char * old_extranonce_str = GLOBAL_STATE->extranonce_str;
-                GLOBAL_STATE->extranonce_str = stratum_api_v1_message.extranonce_str;
-                GLOBAL_STATE->extranonce_2_len = stratum_api_v1_message.extranonce_2_len;
+                char * old_extranonce_str = GLOBAL_STATE.extranonce_str;
+                GLOBAL_STATE.extranonce_str = stratum_api_v1_message.extranonce_str;
+                GLOBAL_STATE.extranonce_2_len = stratum_api_v1_message.extranonce_2_len;
                 free(old_extranonce_str);
 
                 asic_task_notify_xn2_change();
                 
             } else if (stratum_api_v1_message.method == CLIENT_RECONNECT) {
                 ESP_LOGE(TAG, "Pool requested client reconnect...");
-                stratum_close_connection(GLOBAL_STATE);
+                stratum_close_connection();
                 break;
             } else if (stratum_api_v1_message.method == STRATUM_RESULT) {
                 if (stratum_api_v1_message.response_success) {
                     ESP_LOGI(TAG, "message result \x1b[0;33maccepted\x1b[0m");
-                    SYSTEM_notify_accepted_share(GLOBAL_STATE);
+                    SYSTEM_notify_accepted_share();
                 } else {
                     ESP_LOGW(TAG, "message result rejected: %s", stratum_api_v1_message.error_str);
-                    SYSTEM_notify_rejected_share(GLOBAL_STATE, stratum_api_v1_message.error_str);
+                    SYSTEM_notify_rejected_share(stratum_api_v1_message.error_str);
+                }
+                if(stratum_api_v1_message.error_str) {
+                    free(stratum_api_v1_message.error_str);
+                    stratum_api_v1_message.error_str = NULL;
                 }
             } else if (stratum_api_v1_message.method == STRATUM_RESULT_SETUP) {
                 // Reset retry attempts after successfully receiving data.
                 retry_attempts = 0;
                 if (stratum_api_v1_message.response_success) {
                     ESP_LOGI(TAG, "setup message accepted");
-                    if (stratum_api_v1_message.message_id == authorize_message_id) {
-                        STRATUM_V1_suggest_difficulty(GLOBAL_STATE->sock, GLOBAL_STATE->send_uid++, difficulty);
+                    if (stratum_api_v1_message.message_id == STRATUM_TX_ID_AUTHORIZE /*authorize_message_id*/) {
+                        // STRATUM_V1_suggest_difficulty(GLOBAL_STATE.sock, GLOBAL_STATE.send_uid++, difficulty);
+                        STRATUM_V1_suggest_difficulty(GLOBAL_STATE.sock, GLOBAL_STATE.send_uid++, suggestDiff);
                     }
                     if (extranonce_subscribe) {
-                        STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->sock, GLOBAL_STATE->send_uid++);
+                        STRATUM_V1_extranonce_subscribe(GLOBAL_STATE.sock, STRATUM_TX_ID_SUBSCRIBE_XN /* GLOBAL_STATE.send_uid++ */);
                     }
                 } else {
                     ESP_LOGE(TAG, "setup message rejected: %s", stratum_api_v1_message.error_str);
                 }
+                if(stratum_api_v1_message.error_str) {
+                    free(stratum_api_v1_message.error_str);
+                    stratum_api_v1_message.error_str = NULL;
+                }
             }
+
+
+
+            {
+                uint16_t currSD = getSuggestDiff(suggestDiff);
+                if(currSD != suggestDiff) {
+                    suggestDiff = currSD;
+                    STRATUM_V1_suggest_difficulty(GLOBAL_STATE.sock, GLOBAL_STATE.send_uid++, suggestDiff);
+                }
+            }
+
         }
     }
     vTaskDelete(NULL);

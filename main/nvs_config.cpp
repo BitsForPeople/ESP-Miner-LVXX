@@ -13,7 +13,7 @@
 
 static const char* const NVS_CONFIG_NAMESPACE = "main"; 
 
-#define FLOAT_STR_LEN 32
+static constexpr std::size_t FLOAT_STR_LEN = 32;
 
 static const char * const TAG = "nvs_config";
 

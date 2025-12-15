@@ -39,7 +39,7 @@ struct StatisticsData
 
 // void clearStatisticData();
 
-void statistics_init(void* pvParameters);
+void statistics_init(void);
 void statistics_deinit(void);
 
 // void statistics_task(void* pvParameters);

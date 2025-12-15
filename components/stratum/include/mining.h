@@ -8,6 +8,7 @@
 extern "C" {
 #endif
 
+
 typedef struct
 {
     uint32_t version;
@@ -26,6 +27,8 @@ typedef struct
     uint32_t pool_diff;
     char *jobid;
     char *extranonce2;
+    Nonce_t xn2;
+    JobId_t jid;
 } bm_job;
 
 void free_bm_job(bm_job *job);
@@ -47,7 +50,12 @@ void calculate_merkle_root_hash_bin(const MemSpan_t coinbase_tx,
 
 void calculate_merkle_root_hash(const char *coinbase_tx, const uint8_t merkle_branches[][32], const int num_merkle_branches, Hash_t* out_hash);
 
-void construct_bm_job(mining_notify *params, const Hash_t* const merkle_root, const uint32_t version_mask, const uint32_t difficulty, bm_job* out_job);
+void construct_bm_job(mining_notify *params,
+    const Hash_t* const merkle_root,
+    const uint32_t version_mask,
+    const uint32_t difficulty,
+    bool build_midstates,
+    bm_job* out_job);
 
 uint64_t test_nonce_value(const bm_job *job, const uint32_t nonce, const uint32_t rolled_version);
 

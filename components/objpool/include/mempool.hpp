@@ -4,10 +4,11 @@
 #include <type_traits>
 #include <functional>
 #include <span>
+#include "obj_pool_stats.h"
 
 namespace mempool {
 
-    namespace {
+    namespace detail {
 
         /**
          * @brief This union give us a pointer member which matches the alignment of \c T.
@@ -24,13 +25,13 @@ namespace mempool {
                 U<T>* next;
             };
         };
-    }
+    } // namespace detail
 
     template<typename T>
-    requires (!std::is_const_v<T> && sizeof(T) >= sizeof(U<T>))
+    requires (!std::is_const_v<T> && sizeof(T) >= sizeof(detail::U<T>))
     class MemPoolBase {
 
-        using item_t = U<T>;
+        using item_t = detail::U<T>;
 
         public:
             MemPoolBase() = default;
@@ -183,6 +184,70 @@ namespace mempool {
             void addToAllocCnt(const int cnt) {
                 allocCnt.fetch_add(cnt,std::memory_order::relaxed);
             }
+    };
+
+    // struct Stats {
+    //     uint32_t size;
+    //     uint32_t inUse;
+    //     uint32_t maxInUse;
+    //     constexpr Stats(uint32_t size, const uint32_t inUse, const uint32_t maxInUse) :
+    //         size {size},
+    //         inUse {inUse},
+    //         maxInUse {maxInUse}
+    //     {
+
+    //     }
+    // };
+
+    template<typename T, size_t GROWCNT, auto ALLOC_FN> 
+    class GrowingStatsMemPool : private GrowingMemPool<T,GROWCNT,ALLOC_FN> {
+        using base_t = GrowingMemPool<T,GROWCNT,ALLOC_FN>;
+        public:
+
+            using base_t::base_t;
+
+            ObjPoolStats_t getStats(void) const {
+                return 
+                    ObjPoolStats_t {
+                        .allocCnt = this->getSize(),
+                        .inUseCnt = getInUseCnt(),
+                        .maxInUseCnt = getMaxInUseCnt()
+                    };
+            }
+
+            uint32_t getInUseCnt(void) const {
+                return this->takenCnt.load(std::memory_order::relaxed);
+            }
+
+            uint32_t getMaxInUseCnt(void) const {
+                return this->maxTakenCnt.load(std::memory_order::relaxed);
+            }
+
+            T* take(void) {
+                T* obj = base_t::take();
+                if(obj) {
+                    const uint32_t tcnt = takenCnt.fetch_add(1,std::memory_order::relaxed) + 1;
+                    uint32_t max = maxTakenCnt.load(std::memory_order::relaxed);
+                    do {
+                        // nothing.
+                    } while (tcnt > max && !maxTakenCnt.compare_exchange_strong(max,tcnt));
+                }
+                return obj;
+            }
+
+            void put(T* obj) {
+                if(obj) {
+                    base_t::put(obj);
+                    takenCnt.fetch_sub(1,std::memory_order::relaxed);
+                }
+            }
+
+            using base_t::growBy;
+            using base_t::getSize;
+
+        private:
+            std::atomic<uint32_t> takenCnt {};
+            std::atomic<uint32_t> maxTakenCnt {};
     };
 
 } // namespace mempool

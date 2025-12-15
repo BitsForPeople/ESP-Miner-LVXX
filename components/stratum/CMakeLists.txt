@@ -6,6 +6,10 @@ SRCS
     "strbuf.c"
     "hashpool.cpp"
     "bm_job_pool.cpp"
+    "coinbase.cpp"
+    "jobfactory.cpp"
+    "json_rpc.cpp"
+    "stratum_rpc.cpp"
                     
 INCLUDE_DIRS
     "include"

@@ -9,32 +9,35 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "global_state.h"
 #include "asic_task_intf.h"
 #include "bm_job_builder.h"
 #include "bm_job_pool.h"
 
 #include "asic.h"
 
+#include "tickinterval.hpp"
+
 static const char* const TAG = "asic_task";
 
-static inline float getHashrate_MHz(const GlobalState* const GLOBAL_STATE) {
-    return (GLOBAL_STATE->POWER_MANAGEMENT_MODULE.frequency_value * ASIC_get_hashes_per_clock(GLOBAL_STATE));
+static inline float getHashrate_MHz(void) {
+    return (GLOBAL_STATE.POWER_MANAGEMENT_MODULE.frequency_value * ASIC_get_hashes_per_clock(&GLOBAL_STATE));
 }
 
-static inline uint32_t getMaxMsPerJob(const GlobalState* const GLOBAL_STATE, uint32_t version_mask) {
+static inline uint32_t getMaxMsPerJob(uint32_t version_mask) {
     // Divide by 1<<32 then divide by 1<<(version_mask popcount), i.e.
     // shift right by 32, then again by popcount.
     // Divide raw hashrate by (2^32 * 2^popcnt(version_mask))
 
     int rshift = 32;
-    if(ASIC_has_version_rolling(GLOBAL_STATE)) {
-        rshift += __builtin_popcount(GLOBAL_STATE->version_mask);
+    if(ASIC_has_version_rolling(&GLOBAL_STATE)) {
+        rshift += __builtin_popcount(GLOBAL_STATE.version_mask);
     }
-    const float raw = getHashrate_MHz(GLOBAL_STATE);
+    const float raw = getHashrate_MHz();
     const float mhz = ldexpf(raw, -rshift); // negative shift amount needed for a *right* shift!
     const uint32_t msPerJob = 1.f/(mhz*1000.f);
     ESP_LOGW(TAG, "vmask: %" PRIx32 " hr: %" PRIu32 " -> max. %" PRIu32 "ms per job",
-        GLOBAL_STATE->version_mask,
+        GLOBAL_STATE.version_mask,
         (uint32_t)raw,
         msPerJob
     );
@@ -47,16 +50,16 @@ typedef struct JobTime {
     uint32_t ticks_per_job;
 } JobTime_t;
 
-static JobTime_t jobTime = {0};
+static JobTime_t jobTime {};
 
-static inline uint32_t getCurrentJobTimeTicks(const GlobalState* const GLOBAL_STATE) {
-    if (GLOBAL_STATE->version_mask != jobTime.vmask ||
-        GLOBAL_STATE->POWER_MANAGEMENT_MODULE.frequency_value != jobTime.freq ||
+static inline uint32_t getCurrentJobTimeTicks(void) {
+    if (GLOBAL_STATE.version_mask != jobTime.vmask ||
+        GLOBAL_STATE.POWER_MANAGEMENT_MODULE.frequency_value != jobTime.freq ||
         jobTime.ticks_per_job == 0) {
 
-            jobTime.freq = GLOBAL_STATE->POWER_MANAGEMENT_MODULE.frequency_value;
-            jobTime.vmask = GLOBAL_STATE->version_mask;
-            uint32_t ms = getMaxMsPerJob(GLOBAL_STATE,GLOBAL_STATE->version_mask);
+            jobTime.freq = GLOBAL_STATE.POWER_MANAGEMENT_MODULE.frequency_value;
+            jobTime.vmask = GLOBAL_STATE.version_mask;
+            uint32_t ms = getMaxMsPerJob(GLOBAL_STATE.version_mask);
 
             ms = (ms < 10) ? 10 : ms;
             ms = (ms > 5000) ? 5000 : ms;
@@ -67,18 +70,18 @@ static inline uint32_t getCurrentJobTimeTicks(const GlobalState* const GLOBAL_ST
     return jobTime.ticks_per_job;
 }
 
-static TickType_t get_ticks_left(const TickType_t tStart, const TickType_t max_wait) {
-    if(max_wait == portMAX_DELAY) {
-        return max_wait;
-    } else {
-        const TickType_t elapsed = xTaskGetTickCount() - tStart;
-        if(max_wait > elapsed) {
-            return max_wait - elapsed;
-        } else {
-            return 0;
-        }
-    }
-}
+// static TickType_t get_ticks_left(const TickType_t tStart, const TickType_t max_wait) {
+//     if(max_wait == portMAX_DELAY) {
+//         return max_wait;
+//     } else {
+//         const TickType_t elapsed = xTaskGetTickCount() - tStart;
+//         if(max_wait > elapsed) {
+//             return max_wait - elapsed;
+//         } else {
+//             return 0;
+//         }
+//     }
+// }
 
 
 
@@ -121,47 +124,49 @@ static inline void release_mining_notify(mining_notify* const mining_notificatio
     }
 }
 
-static inline void invalidate_all_jobs(GlobalState* const GLOBAL_STATE) {
-    pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock);
+static inline void invalidate_all_jobs(void) {
+    pthread_mutex_lock(&GLOBAL_STATE.valid_jobs_lock);
     {
         for (int i = 0; i < 128; i = i + 4) {
-            GLOBAL_STATE->valid_jobs[i] = 0;
+            GLOBAL_STATE.valid_jobs[i] = 0;
         }
     }
-    pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock);
+    pthread_mutex_unlock(&GLOBAL_STATE.valid_jobs_lock);
 }
 
 
 
 void ASIC_task(void *pvParameters)
 {
-    GlobalState* const GLOBAL_STATE = (GlobalState *)pvParameters;
+    GLOBAL_STATE.ASIC_TASK_MODULE.active_jobs = (bm_job**)calloc(128,sizeof(bm_job *));
+    GLOBAL_STATE.valid_jobs = (uint8_t*)calloc(128,sizeof(uint8_t));
 
-    GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs = malloc(sizeof(bm_job *) * 128);
-    GLOBAL_STATE->valid_jobs = malloc(sizeof(uint8_t) * 128);
+    // pthread_mutex_lock(&GLOBAL_STATE.valid_jobs_lock);
+    // for (int i = 0; i < 128; i++)
+    // {
+    //     GLOBAL_STATE.ASIC_TASK_MODULE.active_jobs[i] = NULL;
+    //     GLOBAL_STATE.valid_jobs[i] = 0;
+    // }
+    // pthread_mutex_unlock(&GLOBAL_STATE.valid_jobs_lock);
 
-    pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock);
-    for (int i = 0; i < 128; i++)
-    {
-        GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[i] = NULL;
-        GLOBAL_STATE->valid_jobs[i] = 0;
-    }
-    pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock);
-
-    double asic_job_frequency_ms = ASIC_get_asic_job_frequency_ms(GLOBAL_STATE);
+    double asic_job_frequency_ms = ASIC_get_asic_job_frequency_ms(&GLOBAL_STATE);
 
     ESP_LOGI(TAG, "ASIC Job Interval: %.2f ms", asic_job_frequency_ms);
-    SYSTEM_notify_mining_started(GLOBAL_STATE);
+    SYSTEM_notify_mining_started();
     ESP_LOGI(TAG, "ASIC Ready!");
 
     const TickType_t job_freq_ticks = (uint32_t)asic_job_frequency_ms / portTICK_PERIOD_MS;
 
-    TickType_t last_job_time = 0;
+    freertos::TickInterval jobInterval {job_freq_ticks};
+    jobInterval.expireNow();
 
     mining_notify* mining_notification = NULL;
     uint64_t extranonce_2 = 0;
 
     uint32_t rnd = esp_random();
+
+    const bool build_midstates = !ASIC_is_midstate_autogen(&GLOBAL_STATE);
+
     while (1)
     {
         rnd += esp_random();
@@ -175,7 +180,7 @@ void ASIC_task(void *pvParameters)
             (mining_notification == NULL) ? 
                 portMAX_DELAY
                 :
-                get_ticks_left(last_job_time,job_freq_ticks)
+                jobInterval.ticksLeft()
         );
 
         if(event_is_abandon_work(evt)) {
@@ -188,17 +193,22 @@ void ASIC_task(void *pvParameters)
             release_mining_notify(mining_notification);
             mining_notification = NULL;
 
-            invalidate_all_jobs(GLOBAL_STATE);
+            invalidate_all_jobs();
 
             // The next job should start immediately when we get new work. So pretend the last job was sent a full interval ago.
-            last_job_time = xTaskGetTickCount() - job_freq_ticks;
+            jobInterval.expireNow();
         }
         if(event_is_version_change(evt)) {
-            ESP_LOGI(TAG, "New version mask %" PRIx32, (uint32_t)(GLOBAL_STATE->version_mask >> 13));
-            ASIC_set_version_mask(GLOBAL_STATE, GLOBAL_STATE->version_mask);
+            ESP_LOGI(TAG, "New version mask 0x%" PRIx32, (uint32_t)(GLOBAL_STATE.version_mask >> 13));
+            ASIC_set_version_mask(&GLOBAL_STATE, GLOBAL_STATE.version_mask);
         }
         if(event_is_diff_change(evt)) {
             // Ok...
+            uint32_t newDiff = GLOBAL_STATE.pool_difficulty;
+            newDiff = newDiff < 256 ? newDiff : 256;
+            ESP_LOGI(TAG, "Changing diff mask to %" PRIu32, newDiff);
+            jobInterval.expireNow();
+            ASIC_set_difficulty_mask(&GLOBAL_STATE,newDiff);
         }
         if(event_is_new_work(evt)) {
             ESP_LOGI(TAG, "Getting new work.");
@@ -212,19 +222,22 @@ void ASIC_task(void *pvParameters)
         }
 
         if(mining_notification != NULL) {
-            if(get_ticks_left(last_job_time,job_freq_ticks) == 0) {
+            // if(get_ticks_left(last_job_time,job_freq_ticks) == 0) {
+            if(jobInterval.expired()) {
                 // It's time to send a new job.
-                last_job_time = xTaskGetTickCount();
+                // last_job_time = xTaskGetTickCount();
+                jobInterval.restart();
 
                 bm_job* const next_bm_job = bmjobpool_take();
 
                 if(next_bm_job != NULL) {
-                    if(bm_job_build(GLOBAL_STATE,mining_notification,extranonce_2, GLOBAL_STATE->pool_difficulty,next_bm_job)) {
+                    if(bm_job_build(mining_notification,extranonce_2, GLOBAL_STATE.pool_difficulty,build_midstates,next_bm_job)) {
                         extranonce_2 += 1;
-                        ASIC_send_work(GLOBAL_STATE, next_bm_job);
+                        ASIC_send_work(&GLOBAL_STATE, next_bm_job);
                     } else {
                         ESP_LOGW(TAG, "bm_job_build failed.");
                     }
+// bmjobpool_log_stats();
                 } else {
                     ESP_LOGW(TAG, "Couldn't get a bm_job from the pool.");
                 }

@@ -7,11 +7,16 @@
 #include <sys/time.h>
 #include "mining_types.h"
 
+#include "stratum_rpc.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define MAX_MERKLE_BRANCHES 32
 #define HASH_SIZE 32
-#define COINBASE_SIZE 100
-#define COINBASE2_SIZE 128
+// #define COINBASE_SIZE 100
+// #define COINBASE2_SIZE 128
 #define MAX_REQUEST_IDS 16
 #define MAX_EXTRANONCE_2_LEN 32
 
@@ -35,8 +40,6 @@ typedef enum
     CLIENT_RECONNECT
 } stratum_method;
 
-static const int  STRATUM_ID_CONFIGURE    = 1;
-static const int  STRATUM_ID_SUBSCRIBE    = 2;
 
 typedef struct
 {
@@ -44,9 +47,7 @@ typedef struct
     char *prev_block_hash;
     char *coinbase_1;
     char *coinbase_2;
-    // uint8_t *merkle_branches;
     HashLink_t* merkle__branches;
-    size_t n_merkle_branches;
     uint32_t version;
     uint32_t target;
     uint32_t ntime;
@@ -54,31 +55,37 @@ typedef struct
 
 typedef struct
 {
-    char * extranonce_str;
-    int extranonce_2_len;
-
     int64_t message_id;
     // Indicates the type of request the message represents.
     stratum_method method;
 
     union {
+        // struct {
+        //     // STRATUM_RESULT_SUBSCRIBE or MINING_SET_EXTRANONCE
+        //     char * extranonce_str;
+        //     int extranonce_2_len;
+        // };
         struct {
-            // mining.notify
+            // MINING_NOTIFY
             int should_abandon_work;
             mining_notify *mining_notification;
         };
         struct {
-            // mining.set_difficulty
+            // MINING_SET_DIFFICULTY
             uint32_t new_difficulty;
         };
         struct {
-            // mining.set_version_mask
+            // MINING_SET_VERSION_MASK
             uint32_t version_mask;
         };
         struct {
-            // result
+            // STRATUM_RESULT
             bool response_success;
             char * error_str;
+
+            // STRATUM_RESULT_SUBSCRIBE or MINING_SET_EXTRANONCE
+            char * extranonce_str;
+            int extranonce_2_len;
         };
     };
 } StratumApiV1Message;
@@ -93,6 +100,10 @@ typedef struct {
 // void STRATUM_V1_initialize_buffer();
 
 void STRATUM_V1_init(void);
+
+static inline uint32_t STRATUM_V1_next_submit_id(void) {
+    return rpc_get_next_submit_id();
+}
 
 void STRATUM_V1_clear_jsonrpc_buffer(void);
 
@@ -121,5 +132,9 @@ int STRATUM_V1_submit_share(int socket, int send_uid, const char *username, cons
                             const uint32_t version);
 
 double STRATUM_V1_get_response_time_ms(int request_id);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // STRATUM_API_H

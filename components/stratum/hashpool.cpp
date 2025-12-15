@@ -36,6 +36,7 @@ void hashpool_put(HashLink_t* const obj) {
     }
 }
 
+
 HashLink_t* hashpool_take() {
     HashLink_t* h = pool.take();
 

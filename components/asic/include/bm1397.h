@@ -13,7 +13,9 @@
 extern const AsicDrvr_t BM1397_drvr;
 
 unsigned BM1397_get_compatibility(const uint16_t chip_id);
+// uint32_t BM1397_get_pref_num_midstates(void);
 uint8_t BM1397_init(float frequency, uint16_t asic_count, uint16_t difficulty);
+void BM1397_set_diff_mask(uint32_t difficulty);
 void BM1397_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job);
 void BM1397_set_version_mask(uint32_t version_mask);
 int BM1397_set_max_baud(void);

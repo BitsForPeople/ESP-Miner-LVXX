@@ -43,8 +43,10 @@ const AsicDrvr_t BM1370_drvr = {
     .id = BM1370,
     .name = "BM1370",
     .hashes_per_clock = 2040,
+    .midstate_autogen = true,
     .get_compatibility = BM1370_get_compatibility,
     .init = BM1370_init,
+    .set_diff_mask = BM1370_set_diff_mask,
     .process_work = BM1370_process_work,
     .set_max_baud = BM1370_set_max_baud,
     .send_work = BM1370_send_work,
@@ -184,6 +186,10 @@ unsigned BM1370_get_compatibility(const uint16_t chip_id) {
     }
 }
 
+uint32_t BM1370_get_pref_num_midstates(void) {
+    return 0;
+}
+
 uint8_t BM1370_init(float frequency, uint16_t asic_count, uint16_t difficulty)
 {
     // set version mask
@@ -292,6 +298,12 @@ uint8_t BM1370_init(float frequency, uint16_t asic_count, uint16_t difficulty)
     _send_BM1370((TYPE_CMD | GROUP_ALL | CMD_WRITE), set_10_hash_counting, 6, BM1370_SERIALTX_DEBUG);
 
     return chip_counter;
+}
+
+void BM1370_set_diff_mask(uint32_t difficulty) {
+    uint8_t difficulty_mask[6];
+    ASIC_get_difficulty_mask(difficulty, difficulty_mask);
+    _send_BM1370((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1370_SERIALTX_DEBUG);    
 }
 
 // static void _send_read_address(void)

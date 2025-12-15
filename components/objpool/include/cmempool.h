@@ -5,6 +5,12 @@
 extern "C" {
 #endif
 
+// typedef struct ObjPoolStats {
+//     uint32_t allocCnt;
+//     uint32_t inUseCnt;
+//     uint32_t maxInUseCnt;
+// } ObjPoolStats_t;
+
 typedef struct mempool_pool {
     _Atomic (void*) dummy;
 } mempool_pool_t;

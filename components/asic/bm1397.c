@@ -50,8 +50,10 @@ const AsicDrvr_t BM1397_drvr = {
     .id = BM1397,
     .name = "BM1397",
     .hashes_per_clock = 672,
+    .midstate_autogen = false,
     .get_compatibility = BM1397_get_compatibility,
     .init = BM1397_init,
+    .set_diff_mask = BM1397_set_diff_mask,
     .process_work = BM1397_process_work,
     .set_max_baud = BM1397_set_max_baud,
     .send_work = BM1397_send_work,
@@ -263,6 +265,10 @@ unsigned BM1397_get_compatibility(const uint16_t chip_id) {
     }
 }
 
+uint32_t BM1397_get_pref_num_midstates(void) {
+    return 4;
+}
+
 uint8_t BM1397_init(float frequency, uint16_t asic_count, uint16_t difficulty)
 {
     // send the init command
@@ -311,6 +317,12 @@ uint8_t BM1397_init(float frequency, uint16_t asic_count, uint16_t difficulty)
     BM1397_send_hash_frequency(frequency);
 
     return chip_counter;
+}
+
+void BM1397_set_diff_mask(uint32_t difficulty) {
+    uint8_t difficulty_mask[6];
+    ASIC_get_difficulty_mask(difficulty, difficulty_mask);
+    _send_BM1397((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1397_SERIALTX_DEBUG);    
 }
 
 // Baud formula = 25M/((denominator+1)*8)

@@ -22,12 +22,18 @@
 
 #include "cjson_helper.h"
 
+#include "mem_search.h"
+
 GlobalState GLOBAL_STATE;
 
 static const char * const TAG = "bitaxe";
 
+static const ASIC_ctrl_cfg_t ASIC_CTRL_CFG = { .reset_fn = set_asic_reset };
+
 void app_main(void)
 {
+
+// if(false) {
 
     ESP_LOGI(TAG, "Welcome to the bitaxe - FOSS || GTFO!");
 
@@ -62,16 +68,16 @@ void app_main(void)
 
     if (self_test(&GLOBAL_STATE)) return;
 
-    SYSTEM_init_system(&GLOBAL_STATE);
-    statistics_init(&GLOBAL_STATE);
+    SYSTEM_init_system();
+    statistics_init();
 
     // init AP and connect to wifi
     wifi_init(&GLOBAL_STATE);
 
-    SYSTEM_init_peripherals(&GLOBAL_STATE);
+    SYSTEM_init_peripherals();
 
     //start the API for AxeOS
-    start_rest_server(&GLOBAL_STATE);
+    start_rest_server();
 
     // Initialize BAP interface
     // esp_err_t bap_ret = BAP_init(&GLOBAL_STATE);
@@ -87,15 +93,15 @@ void app_main(void)
     }
 
 
-    if (asic_reset() != ESP_OK) {
-        GLOBAL_STATE.SYSTEM_MODULE.asic_status = "ASIC reset failed";
-        ESP_LOGE(TAG, "ASIC reset failed!");
-        return;
-    }
+    // if (asic_reset() != ESP_OK) {
+    //     GLOBAL_STATE.SYSTEM_MODULE.asic_status = "ASIC reset failed";
+    //     ESP_LOGE(TAG, "ASIC reset failed!");
+    //     return;
+    // }
 
     SERIAL_init();
 
-    if (ASIC_init(&GLOBAL_STATE) == 0) {
+    if (ASIC_init(&GLOBAL_STATE, &ASIC_CTRL_CFG) == 0) {
         GLOBAL_STATE.SYSTEM_MODULE.asic_status = "Chip count 0";
         ESP_LOGE(TAG, "Chip count 0");
         return;
@@ -106,10 +112,10 @@ void app_main(void)
 
     GLOBAL_STATE.ASIC_initalized = true;
 
-    xTaskCreatePinnedToCore(POWER_MANAGEMENT_task, "power management", 8192, (void *) &GLOBAL_STATE, 10, NULL, 0);
-    xTaskCreatePinnedToCore(stratum_task, "stratum", 8192, (void *) &GLOBAL_STATE, 5, NULL, 0);
+    xTaskCreatePinnedToCore(POWER_MANAGEMENT_task, "power management", 8192, NULL, 10, NULL, 0);
+    xTaskCreatePinnedToCore(stratum_task, "stratum", 8192, NULL, 5, NULL, 0);
 
-    xTaskCreatePinnedToCore(ASIC_task, "asic", 8192, (void *) &GLOBAL_STATE, 10, NULL, 1);
-    xTaskCreatePinnedToCore(ASIC_result_task, "asic result", 8192, (void *) &GLOBAL_STATE, 15, NULL, 1);
-    
+    xTaskCreatePinnedToCore(ASIC_task, "asic", 8192, NULL, 10, NULL, 1);
+    xTaskCreatePinnedToCore(ASIC_result_task, "asic result", 8192, NULL, 15, NULL, 1);
+// }    
 }

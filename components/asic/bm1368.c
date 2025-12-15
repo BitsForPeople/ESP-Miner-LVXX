@@ -44,8 +44,10 @@ const AsicDrvr_t BM1368_drvr = {
     .id = BM1368,
     .name = "BM1368",
     .hashes_per_clock = 1276,
+    .midstate_autogen = true,
     .get_compatibility = BM1368_get_compatibility,
     .init = BM1368_init,
+    .set_diff_mask = BM1368_set_diff_mask,
     .process_work = BM1368_process_work,
     .set_max_baud = BM1368_set_max_baud,
     .send_work = BM1368_send_work,
@@ -165,6 +167,10 @@ unsigned BM1368_get_compatibility(const uint16_t chip_id) {
     }
 }
 
+uint32_t BM1368_get_pref_num_midstates(void) {
+    return 0;
+}
+
 uint8_t BM1368_init(float frequency, uint16_t asic_count, uint16_t difficulty)
 {
     // set version mask
@@ -226,6 +232,12 @@ uint8_t BM1368_init(float frequency, uint16_t asic_count, uint16_t difficulty)
     BM1368_set_version_mask(STRATUM_DEFAULT_VERSION_MASK);
 
     return chip_counter;
+}
+
+void BM1368_set_diff_mask(uint32_t difficulty) {
+    uint8_t difficulty_mask[6];
+    ASIC_get_difficulty_mask(difficulty, difficulty_mask);
+    _send_BM1368((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1368_SERIALTX_DEBUG);    
 }
 
 int BM1368_set_default_baud(void)

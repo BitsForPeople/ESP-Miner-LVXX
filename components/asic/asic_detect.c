@@ -2,10 +2,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "common.h"
 #include "serial.h"
 #include "esp_log.h"
 #include "crc.h"
+#include "asic_detect.h"
 
 #define PREAMBLE 0xAA55
 
@@ -15,7 +19,7 @@ static const uint8_t READ_REG0_CMD[] = {0x55, 0xAA, 0x52, 0x05, 0x00, 0x00, 0x0A
 
 static const uint16_t RX_PREAMBL = 0x55AA;
 
-static const uint16_t RESP_WAIT_MS = 100;
+static const unsigned RESP_WAIT_MS = 100;
 
 
 typedef struct __attribute__((packed)) ReadRegBase {
@@ -62,22 +66,32 @@ static inline bool isValidShrtResponse(const uint8_t* const data, const unsigned
 }
 
 static inline int rx(uint8_t* const out, unsigned len) {
-    int r = SERIAL_rx(out,len,RESP_WAIT_MS);
+    int r = SERIAL_rx(out,len, RESP_WAIT_MS / portTICK_PERIOD_MS);
     if(r < 0) {
         ESP_LOGE(TAG, "Error reading ASIC response: %d",r);
     }
     return r;
 }
 
+static void waitForSerialIdle(const TickType_t minIdle) {
+    uint8_t buf[16];
+    while(SERIAL_rx(buf,sizeof(buf),minIdle) > 0) {
+
+    }
+}
 
 
-
-int ASIC_detect(uint16_t* const out_chip_id) {
+int ASIC_detect(const ASIC_ctrl_cfg_t* const ctrl, uint16_t* const out_chip_id) {
 
     static const unsigned RSP_SHRT = sizeof(ReadRegRspShrt_t);
     static const unsigned RSP_LONG = sizeof(ReadRegRspLong_t);
     static const unsigned RSP_DIFF = RSP_LONG - RSP_SHRT;
 
+    ctrl->reset_fn(true);
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+    ctrl->reset_fn(false);
+
+    waitForSerialIdle(100 / portTICK_PERIOD_MS); // Discard any glitches on the RX from the reset while giving the ASICS some time to finish reset.
 
     SERIAL_send(READ_REG0_CMD,sizeof(READ_REG0_CMD),false);
 
@@ -152,7 +166,7 @@ int ASIC_detect(uint16_t* const out_chip_id) {
         if(cnt <= 0) {
             // Something went wrong.
             // Consume any remaining response(s) from the serial:
-            while(SERIAL_rx(rxBuf.u8,sizeof(rxBuf.u8),10) > 0) {
+            while(SERIAL_rx(rxBuf.u8,sizeof(rxBuf.u8), 50 / portTICK_PERIOD_MS) > 0) {
 
             }
         }
@@ -168,7 +182,7 @@ int count_asic_chips(uint16_t asic_count, uint16_t chip_id, int chip_id_response
 
     int chip_counter = 0;
     while (true) {
-        int received = SERIAL_rx(buffer, chip_id_response_length, 1000);
+        int received = SERIAL_rx(buffer, chip_id_response_length, 1000 / portTICK_PERIOD_MS);
         if (received == 0) break;
 
         if (received == -1) {

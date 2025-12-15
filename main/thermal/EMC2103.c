@@ -107,7 +107,7 @@ float EMC2103_get_external_temp(void)
 {
     uint8_t temp_msb = 0, temp_lsb = 0;
     uint16_t reading;
-    float temp1 = 0.0f, temp2 = 0.0f;
+    float temp1 = 0.0f;
     esp_err_t err;
 
     err = i2c_bitaxe_register_read(EMC2103_dev_handle, EMC2103_EXTERNAL_TEMP1_MSB, &temp_msb, 1);
@@ -143,7 +143,7 @@ float EMC2103_get_external_temp(void)
     }
 
     // Convert the signed reading to temperature in Celsius
-    temp1 = (float)signed_reading / 8.0;
+    temp1 = (float)signed_reading * 0.125f;
 
     err = i2c_bitaxe_register_read(EMC2103_dev_handle, EMC2103_EXTERNAL_TEMP2_MSB, &temp_msb, 1);
     if (err != ESP_OK) {
@@ -176,7 +176,7 @@ float EMC2103_get_external_temp(void)
     }
 
     // Convert the signed reading to temperature in Celsius
-    temp2 = (float)signed_reading / 8.0;
+    // temp2 = (float)signed_reading * 0.125f;
 
 
     //debug the temps
@@ -220,7 +220,7 @@ EMC2103_temps_t EMC2103_get_external_temps(void)
     if (signed_reading & 0x0400) {
         signed_reading |= 0xF800;
     }
-    temps.temp1 = (float)signed_reading / 8.0;
+    temps.temp1 = (float)signed_reading * 0.125f;
 
     // Read temperature 2
     err = i2c_bitaxe_register_read(EMC2103_dev_handle, EMC2103_EXTERNAL_TEMP2_MSB, &temp_msb, 1);
@@ -244,7 +244,7 @@ EMC2103_temps_t EMC2103_get_external_temps(void)
     if (signed_reading & 0x0400) {
         signed_reading |= 0xF800;
     }
-    temps.temp2 = (float)signed_reading / 8.0;
+    temps.temp2 = (float)signed_reading * 0.125f;
 
     ESP_LOGI(TAG, "Temp1: %.2f Temp2: %.2f", temps.temp1, temps.temp2);
 

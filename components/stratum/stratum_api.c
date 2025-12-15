@@ -23,6 +23,9 @@
 
 #include "hashpool.h"
 
+#include "json_rpc.h"
+#include "stratum_rpc.h"
+
 
 #ifndef LIKELY
     #define LIKELY(c) __builtin_expect(!!(c),1)
@@ -329,6 +332,10 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
 {
     ESP_LOGI(TAG, "rx: %s", stratum_json); // debug incoming stratum messages
 
+// {
+//     size_t len = mem_findStrEnd(stratum_json, 8192) - stratum_json;
+//     json_rpc_parse(stratum_json, len);
+// }
     cJSON * json = cJSON_Parse(stratum_json);
 
     cJSON * id_json = cJSON_GetObjectItem(json, "id");
@@ -369,11 +376,10 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         if (result_json == NULL) {
             message->response_success = false;
             message->error_str = strdup("unknown");
-            
         // if it's an error, then it's a fail
         } else if (error_json != NULL && !cJSON_IsNull(error_json)) {
             message->response_success = false;
-            message->error_str = strdup("unknown");
+            message->error_str = NULL;
             if (parsed_id < 5) {
                 result = STRATUM_RESULT_SETUP;
             } else {
@@ -388,32 +394,39 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
                     }
                 }
             }
+            if(message->error_str == NULL) {
+                message->error_str = strdup("unknown");
+            }
 
         // if the result is a boolean, then parse it
         } else if (cJSON_IsBool(result_json)) {
-            if (parsed_id < 5) {
-                result = STRATUM_RESULT_SETUP;
-            } else {
+            // if (parsed_id >= 5) {
+            if(rpc_is_valid_submit_id(parsed_id)) {
                 result = STRATUM_RESULT;
+            } else {
+                result = STRATUM_RESULT_SETUP;                
             }
+            message->error_str = NULL;
             if (cJSON_IsTrue(result_json)) {
                 message->response_success = true;
             } else {
                 message->response_success = false;
-                message->error_str = strdup("unknown");
                 if (cJSON_IsString(reject_reason_json)) {
                     message->error_str = strdup(cJSON_GetStringValue(reject_reason_json));
-                }                
+                } else {
+                   message->error_str = strdup("unknown"); 
+                }               
             }
         
         //if the id is STRATUM_ID_SUBSCRIBE parse it
-        } else if (parsed_id == STRATUM_ID_SUBSCRIBE) {
+        } else if (parsed_id == STRATUM_TX_ID_SUBSCRIBE /* STRATUM_ID_SUBSCRIBE */) {
             result = STRATUM_RESULT_SUBSCRIBE;
 
             cJSON * extranonce2_len_json = cJSON_GetArrayItem(result_json, 2);
             if (extranonce2_len_json == NULL) {
                 ESP_LOGE(TAG, "Unable to parse extranonce2_len: %s", result_json->valuestring);
                 message->response_success = false;
+                message->error_str = NULL;
                 goto done;
             }
             int extranonce_2_len = extranonce2_len_json->valueint;
@@ -428,12 +441,13 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
             if (extranonce_json == NULL) {
                 ESP_LOGE(TAG, "Unable parse extranonce: %s", result_json->valuestring);
                 message->response_success = false;
+                message->error_str = NULL;
                 goto done;
             }
             message->extranonce_str = strdup(extranonce_json->valuestring);
             message->response_success = true;
         //if the id is STRATUM_ID_CONFIGURE parse it
-        } else if (parsed_id == STRATUM_ID_CONFIGURE) {
+        } else if (parsed_id == STRATUM_TX_ID_CONFIGURE /* STRATUM_ID_CONFIGURE */) {
             cJSON * mask = cJSON_GetObjectItem(result_json, "version-rolling.mask");
             if (mask != NULL) {
                 result = STRATUM_RESULT_VERSION_MASK;
@@ -460,19 +474,19 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         new_work->coinbase_2 = strdup(cJSON_GetArrayItem(params, 3)->valuestring);
 
         cJSON * merkle_branch = cJSON_GetArrayItem(params, 4);
-        new_work->n_merkle_branches = cJSON_GetArraySize(merkle_branch);
-        if (new_work->n_merkle_branches > MAX_MERKLE_BRANCHES) {
+        int n_merkle_branches = cJSON_GetArraySize(merkle_branch);
+        if (n_merkle_branches > MAX_MERKLE_BRANCHES) {
             printf("Too many Merkle branches.\n");
             abort();
             __builtin_unreachable();
         }
         
-        if(LIKELY(new_work->n_merkle_branches > 0)) {
+        if(LIKELY(n_merkle_branches > 0)) {
             HashLink_t* prev = hashpool_take();
             new_work->merkle__branches = prev;
             hex2bin(cJSON_GetArrayItem(merkle_branch, 0)->valuestring, prev->hash.u8, HASH_SIZE);
 
-            for (size_t i = 1; i < new_work->n_merkle_branches; i++) {
+            for (size_t i = 1; i < n_merkle_branches; i++) {
                 HashLink_t* hl = hashpool_take();
                 hex2bin(cJSON_GetArrayItem(merkle_branch, i)->valuestring, hl->hash.u8, HASH_SIZE);
                 prev->next = hl;

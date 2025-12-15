@@ -17,8 +17,10 @@ struct AsicDrvr {
     Asic id;
     const char* name;
     uint32_t hashes_per_clock;
+    bool midstate_autogen;
     unsigned (*get_compatibility)(uint16_t chipId);
     uint8_t (*init)(float frequency, uint16_t asic_count, uint16_t difficulty);
+    void (*set_diff_mask)(uint32_t difficulty);
     task_result* (*process_work)(GlobalState*);
     int (*set_max_baud)(void);
     void (*send_work)(GlobalState*, bm_job* job);
